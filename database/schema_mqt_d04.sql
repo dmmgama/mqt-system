@@ -1,14 +1,42 @@
 -- ============================================================
 -- MQT SYSTEM — JSJ Structural Engineering
 -- Schema D04 | Tabelas Supabase MQT
--- Versão: 1.0 | Data: 2026-03-13
+-- Versão: 1.2 | Data: 2026-03-13
+-- Decisão D08: instância Supabase dedicada MVP (SSOT indisponível)
 -- ============================================================
 -- INSTRUÇÕES:
--- 1. Correr no Supabase SQL Editor da instância SSOT existente
--- 2. NÃO tocar nas tabelas existentes (projects, blocks, floors,
---    zones, geo_horizons, project_files)
+-- 1. Correr numa instância Supabase NOVA e dedicada ao MQT (D08)
+--    NÃO é a instância do SSOT
+-- 2. Inclui tabela 'projects' local mínima (substitui FK SSOT no MVP)
+--    Quando SSOT restaurado: apagar esta tabela + adicionar FK externa
 -- 3. Correr por esta ordem (dependências FK)
 -- ============================================================
+
+
+-- ------------------------------------------------------------
+-- 0. projects (tabela local MVP — substitui FK SSOT)
+-- Mínima: só o necessário para identificar o projecto
+-- MIGRAÇÃO FUTURA: apagar esta tabela + ligar FK a ssot.projects
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS projects (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome            TEXT NOT NULL,
+  tipologia       TEXT CHECK (tipologia IN
+                    ('habitacao','servicos','misto','industrial','outro')),
+  fase_actual     TEXT,
+  data_mqt        DATE,
+  area_total_m2   FLOAT,
+  notas           TEXT,
+  created_at      TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+-- COMENTÁRIO: Esta tabela é temporária (MVP / D08).
+-- Quando o SSOT for restaurado:
+--   1. INSERT INTO ssot.projects (migrar dados)
+--   2. UPDATE mqt_snapshots SET project_id = <novo_id_ssot>
+--   3. DROP TABLE projects (esta)
+--   4. ALTER TABLE mqt_snapshots ADD CONSTRAINT fk_ssot
+--        FOREIGN KEY (project_id) REFERENCES ssot.projects(id)
 
 
 -- ------------------------------------------------------------
@@ -27,10 +55,11 @@ CREATE TABLE IF NOT EXISTS capitulo_map (
 -- ------------------------------------------------------------
 -- 2. elemento_map
 -- Mapeamento global sufixo → elemento_tipo
--- PK composta: (capitulo, sufixo, projeto_id)
--- projeto_id = NULL significa mapeamento global
+-- PK surrogate (BIGINT) — projeto_id pode ser NULL (mapeamento global)
+-- UNIQUE (capitulo, sufixo, projeto_id) garante unicidade sem PK NULL
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS elemento_map (
+  id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   capitulo          TEXT NOT NULL,
   sufixo            TEXT NOT NULL,
   elemento_tipo     TEXT NOT NULL,
@@ -39,7 +68,7 @@ CREATE TABLE IF NOT EXISTS elemento_map (
   criado_por        TEXT,
   data_criacao      DATE DEFAULT CURRENT_DATE,
   notas             TEXT,
-  PRIMARY KEY (capitulo, sufixo, projeto_id)
+  UNIQUE (capitulo, sufixo, projeto_id)
 );
 
 -- Índice para lookup rápido por elemento_tipo
@@ -50,6 +79,8 @@ CREATE INDEX IF NOT EXISTS idx_elemento_map_tipo
 -- ------------------------------------------------------------
 -- 3. mqt_snapshots
 -- Uma linha por entrega de MQT (projecto × fase × data)
+-- project_id → FK para tabela 'projects' local (MVP/D08)
+--              será migrado para FK SSOT em Camada 2
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mqt_snapshots (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

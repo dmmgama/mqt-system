@@ -2,7 +2,7 @@
 Teste de ligação ao Supabase
 Verifica se as credenciais estão correctas e se as tabelas MQT existem
 """
-from supabase import create_client
+from supabase import create_client, Client
 from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
 
@@ -12,10 +12,12 @@ def test_connection():
     print(f"   URL: {SUPABASE_URL}")
     
     try:
-        client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
         print("   ✅ Cliente Supabase criado com sucesso")
     except Exception as e:
         print(f"   ❌ Erro ao criar cliente: {e}")
+        import traceback
+        traceback.print_exc()
         return False
     
     # Testar acesso às tabelas MQT

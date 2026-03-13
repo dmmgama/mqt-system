@@ -10,9 +10,10 @@
 Sistema Python para ingestão, validação e análise de **Mapas de Quantidades (MQT)** de projetos de estruturas de engenharia civil (Portugal).
 
 - Lê ficheiros Excel MQT de um servidor de empresa (path local)
-- Escreve dados normalizados numa instância **Supabase existente** (partilhada com outro sistema — SSOT)
-- **NÃO toca nas tabelas do SSOT** — apenas escreve nas 6 tabelas MQT novas
-- Futuro: Streamlit dashboard, análise com LLM API
+- Escreve dados normalizados numa instância **Supabase dedicada** (nova instância independente — D08)
+- A instância SSOT está temporariamente indisponível; este sistema corre de forma autónoma no MVP
+- Inclui tabela `projects` local mínima — será substituída por FK para o SSOT quando restaurado
+- Futuro: Streamlit dashboard, análise com LLM API, ligação ao SSOT (Camada 2)
 
 ---
 
@@ -20,7 +21,7 @@ Sistema Python para ingestão, validação e análise de **Mapas de Quantidades 
 
 | Componente | Tecnologia |
 |---|---|
-| Base de dados | Supabase (Postgres) — instância existente |
+| Base de dados | Supabase (Postgres) — instância dedicada MVP (D08) |
 | Ingestão | Python 3.11+ + pandas + openpyxl |
 | Credenciais | python-dotenv (.env local, nunca commitar) |
 | Interface futura | Streamlit |
@@ -153,12 +154,19 @@ Executar: `python tests/test_connection.py`
 
 ---
 
-## TABELAS SUPABASE (as 6 do MQT)
+## TABELAS SUPABASE (MVP — instância dedicada)
 
-Estas tabelas são NOVAS — adicionadas ao schema Supabase existente (SSOT).  
-**Não modificar** as tabelas existentes do SSOT: `projects`, `blocks`, `floors`, `zones`, `geo_horizons`, `project_files`.
+Esta instância Supabase é nova e independente (decisão D08 — SSOT temporariamente indisponível).  
+Inclui uma tabela `projects` local mínima que substituirá a FK para o SSOT quando este for restaurado.
+
+**Migração futura para SSOT (Camada 2):**
+1. Apagar tabela `projects` local
+2. Adicionar FK: `mqt_snapshots.project_id → ssot.projects.id`
+3. Migrar dados: mapear `projects.id` locais para IDs SSOT
+4. Zero reescrita no pipeline Python — só schema muda
 
 ```
+projects          — tabela local mínima (substitui FK SSOT no MVP)
 mqt_snapshots     — 1 snapshot por projecto × fase × entrega
 mqt_artigos       — artigos individuais do Excel MQT
 mqt_indices       — índices calculados (kg/m³, m²/m³) + flags + notas
@@ -167,7 +175,7 @@ capitulo_map      — capítulo → tipo de quantidade + unidade (seed estático
 jsj_precos_ref    — preços unitários de referência JSJ
 ```
 
-Chave de ligação ao SSOT: `mqt_snapshots.project_id` = FK para `projects.id` (SSOT).
+Chave de ligação entre tabelas: `mqt_snapshots.project_id` = FK para `projects.id` (local, MVP).
 
 ### Lógica de mapeamento artigos (IMPORTANTE)
 
@@ -236,7 +244,8 @@ Após criar a estrutura de pastas, copiar estes ficheiros para os locais indicad
 | `KB-03_Decisoes_Arquitecturais.md` | Referência só — não entra no repo |
 | `KB-05_Indices_Referencia.md` | Referência só — não entra no repo |
 
-> O `schema_mqt_d04.sql` deve ser corrido no **Supabase SQL Editor** ANTES de qualquer teste de ligação.
+> O `schema_mqt_d04.sql` deve ser corrido no **Supabase SQL Editor da instância MVP** ANTES de qualquer teste de ligação.
+> Esta é uma instância nova e dedicada ao MQT (D08) — não a instância do SSOT.
 
 ---
 
@@ -255,8 +264,10 @@ Após criar a estrutura de pastas, copiar estes ficheiros para os locais indicad
 
 - **Python mínimo:** 3.11
 - **Supabase key:** Usar `service_role` key (não `anon`) — o pipeline corre server-side
+- **Instância Supabase:** Nova instância dedicada ao MQT (D08) — não a do SSOT
+- **Tabela projects:** Local e mínima no MVP — FK para SSOT adicionada em Camada 2
 - **Excel:** O ficheiro Excel MQT fica SEMPRE no servidor da empresa. O script lê via path (local ou UNC). Nunca mover o Excel para o repo.
 - **Dados reais:** Nunca commitar Excels reais. A pasta `data/` está no `.gitignore`.
-- **Tabelas SSOT:** `projects`, `blocks`, `floors`, `zones`, `geo_horizons`, `project_files` — **só leitura** para este sistema.
+- **Tabelas SSOT:** Não existem nesta instância MVP — não referenciar `projects`, `blocks`, `floors`, `zones`, `geo_horizons`, `project_files` do SSOT.
 - **Estimativas de custo** (preço × quantidade) são calculadas on-the-fly — nunca persistidas na DB.
 - **Alerta de preços:** Se `jsj_precos_ref.data_actualizacao` > 12 meses, mostrar aviso de preço desactualizado na interface.
