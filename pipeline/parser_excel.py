@@ -109,105 +109,156 @@ def parse_mqt(excel_path) -> Dict:
     
     # Detectar layout automaticamente
     layout = _detect_layout(ws)
-    quant_cols = layout['quant_cols']
-    col_quant_total = layout['quant_total']
-    col_preco_unit = layout['preco_unit']
-    col_total_eur = layout['total_eur']
     num_zonas = layout['num_zonas']
-    
-    # Colunas fixas (0-based)
-    COL_ARTIGO_COD = 3   # D (0-based)
-    COL_DESCRICAO = 4    # E
-    COL_UNIDADE = 5      # F
-    
-    artigos = []
-    linhas_processadas = 0
-    linhas_ignoradas = 0
-    
-    # Ler linhas de dados (15 a 153, 1-based)
-    for row_num in range(15, 154):
-        row = ws[row_num]
-        
-        # Obter valor da coluna D (artigo_cod)
-        artigo_cod_value = row[COL_ARTIGO_COD].value
-        
-        # Ignorar se vazio
-        if artigo_cod_value is None:
-            linhas_ignoradas += 1
-            continue
-        
-        # Ignorar se é float (cabeçalhos de capítulo como 5.0, 15.0)
-        if isinstance(artigo_cod_value, (int, float)):
-            linhas_ignoradas += 1
-            continue
-        
-        # Converter para string e fazer strip (incluindo aspas)
-        artigo_cod = str(artigo_cod_value).strip().strip("'\"")
-        
-        # Verificar se tem formato de artigo (contém pontos)
-        if '.' not in artigo_cod:
-            linhas_ignoradas += 1
-            continue
-        
-        # Parse do código de artigo
-        parsed_cod = extract_capitulo_info(artigo_cod)
-        if parsed_cod['capitulo'] is None:
-            linhas_ignoradas += 1
-            continue
-        
-        # Extrair outros campos
-        descricao = _get_cell_string(row[COL_DESCRICAO])
-        unidade = _get_cell_string(row[COL_UNIDADE])
-        
-        # Extrair classe de material da descrição (ex: C30/37)
-        classe_material = extract_classe_material(descricao)
-        
-        # Extrair quantidades (floats ou None) - detecção automática de zonas
-        zonas = [_get_cell_float(row[c]) for c in layout['quant_cols']]
-        quant_a = zonas[0] if len(zonas) > 0 else None
-        quant_b = zonas[1] if len(zonas) > 1 else None
-        quant_c = zonas[2] if len(zonas) > 2 else None
-        quant_d = zonas[3] if len(zonas) > 3 else None
 
-        col_qt = layout['quant_total']
-        quant_total = _get_cell_float(row[col_qt]) if col_qt is not None else None
+    rows_out = []
+    current_subcap = None
+    current_classe = None
+    last_artigo_idx = None  # índice do último artigo em rows_out
+
+    for row in ws.iter_rows(min_row=15, max_row=ws.max_row, values_only=True):
+        cod_raw = row[3]
+        desc_raw = row[4]
+        unidade_raw = row[5]
+        desc = str(desc_raw).strip() if desc_raw else None
+        unidade = str(unidade_raw).strip() if unidade_raw else None
+
+        # Linha vazia — ignorar
+        if cod_raw is None and not desc:
+            continue
+
+        # Linha SPEC — juntar ao artigo anterior
+        if cod_raw is None and desc:
+            if last_artigo_idx is not None:
+                rows_out[last_artigo_idx]['especificacao'] = desc
+            continue
+
+        cod_str = str(cod_raw).strip().strip("'\"")
+
+        # Normalizar floats (3.0 → "3", 5.1 → "5.1")
+        try:
+            f = float(cod_str)
+            parts_normalized = str(f).rstrip('0').rstrip('.')
+            cod_str = parts_normalized
+        except Exception:
+            pass
+
+        parts = cod_str.split('.')
+        num_parts = len(parts)
+
+        # Ler quantidades usando valores raw
+        quant_a = _val_to_float(row[layout['quant_cols'][0]]) if len(layout['quant_cols']) > 0 else None
+        quant_b = _val_to_float(row[layout['quant_cols'][1]]) if len(layout['quant_cols']) > 1 else None
+        quant_c = _val_to_float(row[layout['quant_cols'][2]]) if len(layout['quant_cols']) > 2 else None
+        quant_d = _val_to_float(row[layout['quant_cols'][3]]) if len(layout['quant_cols']) > 3 else None
+        col_qt = layout.get('quant_total')
+        quant_total = _val_to_float(row[col_qt]) if col_qt is not None else None
         if quant_total is None:
-            quant_total = round(sum(z or 0 for z in zonas), 4) or None
-        
-        preco_unit = _get_cell_float(row[col_preco_unit]) if col_preco_unit is not None else None
-        total_eur = _get_cell_float(row[col_total_eur]) if col_total_eur is not None else None
-        
-        # Criar dict do artigo
+            quant_total = round(sum(q or 0 for q in [quant_a, quant_b, quant_c, quant_d]), 4) or None
+
+        # CAP — 1 segmento
+        if num_parts == 1:
+            current_subcap = None
+            current_classe = None
+            artigo = {
+                'nivel': 1,
+                'artigo_cod': cod_str,
+                'descricao': desc,
+                'unidade': None,
+                'especificacao': None,
+                'classe_material': None,
+                'elemento_sufixo': None,
+                'is_nivel4': False,
+                'capitulo': cod_str,
+                'subcapitulo': None,
+                'sufixo': None,
+                'quant_a': None, 'quant_b': None,
+                'quant_c': None, 'quant_d': None, 'quant_total': None,
+            }
+            rows_out.append(artigo)
+            last_artigo_idx = len(rows_out) - 1
+            continue
+
+        # SUBCAP — 2 segmentos
+        if num_parts == 2:
+            current_subcap = cod_str
+            current_classe = _extrair_classe(desc) if desc else None
+
+            if unidade:
+                # Subcapítulo com unidade → tratar como artigo nivel=2
+                artigo = {
+                    'nivel': 2,
+                    'artigo_cod': cod_str,
+                    'descricao': desc,
+                    'unidade': unidade,
+                    'especificacao': None,
+                    'classe_material': current_classe,
+                    'elemento_sufixo': parts[1] if len(parts) > 1 else None,
+                    'is_nivel4': False,
+                    'capitulo': parts[0],
+                    'subcapitulo': cod_str,
+                    'sufixo': parts[1] if len(parts) > 1 else None,
+                    'quant_a': quant_a, 'quant_b': quant_b,
+                    'quant_c': quant_c, 'quant_d': quant_d,
+                    'quant_total': quant_total,
+                }
+            else:
+                # Subcapítulo título — sem quantidades
+                artigo = {
+                    'nivel': 2,
+                    'artigo_cod': cod_str,
+                    'descricao': desc,
+                    'unidade': None,
+                    'especificacao': None,
+                    'classe_material': current_classe,
+                    'elemento_sufixo': None,
+                    'is_nivel4': False,
+                    'capitulo': parts[0],
+                    'subcapitulo': cod_str,
+                    'sufixo': None,
+                    'quant_a': None, 'quant_b': None,
+                    'quant_c': None, 'quant_d': None, 'quant_total': None,
+                }
+            rows_out.append(artigo)
+            last_artigo_idx = len(rows_out) - 1
+            continue
+
+        # ARTIGO — 3+ segmentos
+        is_nivel4 = num_parts >= 4
+        nivel = 4 if is_nivel4 else 3
+        elemento_sufixo = parts[2] if len(parts) >= 3 else None
+        sufixo = '.'.join(parts[2:]) if len(parts) >= 3 else None
+
         artigo = {
-            'artigo_cod': artigo_cod,
-            'capitulo': parsed_cod['capitulo'],
-            'subcapitulo': parsed_cod['subcapitulo'],
-            'sufixo': parsed_cod['sufixo'],
-            'elemento_sufixo': parsed_cod['elemento_sufixo'],
-            'descricao': descricao,
+            'nivel': nivel,
+            'artigo_cod': cod_str,
+            'descricao': desc,
             'unidade': unidade,
-            'classe_material': classe_material,
-            'quant_a': quant_a,
-            'quant_b': quant_b,
-            'quant_c': quant_c,
-            'quant_d': quant_d,
+            'especificacao': None,
+            'classe_material': current_classe,
+            'elemento_sufixo': elemento_sufixo,
+            'is_nivel4': is_nivel4,
+            'capitulo': parts[0],
+            'subcapitulo': current_subcap,
+            'sufixo': sufixo,
+            'quant_a': quant_a, 'quant_b': quant_b,
+            'quant_c': quant_c, 'quant_d': quant_d,
             'quant_total': quant_total,
-            'preco_unit': preco_unit,
-            'total_eur': total_eur
         }
-        
-        artigos.append(artigo)
-        linhas_processadas += 1
-    
+        rows_out.append(artigo)
+        last_artigo_idx = len(rows_out) - 1
+
     wb.close()
-    
-    print(f"   ✓ {linhas_processadas} artigos parseados")
-    print(f"   ℹ {linhas_ignoradas} linhas ignoradas (cabeçalhos/vazias)")
+
+    n1 = sum(1 for r in rows_out if r['nivel'] == 1)
+    n2 = sum(1 for r in rows_out if r['nivel'] == 2)
+    n3 = sum(1 for r in rows_out if r['nivel'] >= 3)
+    print(f"   ✓ {len(rows_out)} linhas parseadas (cap={n1}, subcap={n2}, artigos={n3})")
     print(f"   ℹ {num_zonas} zona(s) detectada(s) no layout")
-    
+
     return {
-        'artigos': artigos,
-        'num_zonas': num_zonas
+        'artigos': rows_out,
+        'num_zonas': num_zonas,
     }
 
 
@@ -305,21 +356,69 @@ def _get_cell_string(cell) -> str:
 def _get_cell_float(cell) -> Optional[float]:
     """
     Obtém valor de célula como float
-    
+
     Args:
         cell: objeto Cell do openpyxl
-        
+
     Returns:
         Float ou None se vazio/inválido
     """
     value = cell.value
     if value is None or value == "":
         return None
-    
+
     try:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def _val_to_float(v) -> Optional[float]:
+    """
+    Converte valor raw (de iter_rows values_only=True) para float.
+
+    Args:
+        v: valor raw da célula
+
+    Returns:
+        Float ou None se vazio/inválido
+    """
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _extrair_classe(desc: str) -> Optional[str]:
+    """
+    Extrai classe de material do nome do subcapítulo.
+    Ex: 'Betão C30/37'   → 'C30/37'
+        'Aço A500NR SD'  → 'A500NR SD'
+        'Classe A2 (...)' → 'A2'
+
+    Args:
+        desc: texto da descrição
+
+    Returns:
+        String com classe ou None
+    """
+    if not desc:
+        return None
+    # Betão: C12/15, C20/25, C30/37, C35/45...
+    m = re.search(r'C\d+/\d+', desc)
+    if m:
+        return m.group()
+    # Aço: A500NR SD, A400NR, A500NR...
+    m = re.search(r'A\d+[A-Z\s]*(?:SD)?', desc)
+    if m:
+        return m.group().strip()
+    # Cofragem: Classe A1, A2, A3, A4
+    m = re.search(r'Classe (A\d)', desc)
+    if m:
+        return m.group(1)
+    return None
 
 
 def validate_artigos(artigos: List[Dict]) -> bool:

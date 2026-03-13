@@ -115,8 +115,13 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     agregados = defaultdict(lambda: {'betao_m3': 0.0, 'cofragem_m2': 0.0, 'aco_kg': 0.0})
     
     for artigo in artigos:
-        elemento_tipo = artigo.get('elemento_tipo', 'OUTRO')
+        elemento_tipo = artigo.get('elemento_tipo')
         capitulo = artigo.get('capitulo', '')
+        nivel = artigo.get('nivel', 3)
+
+        # Ignorar caps/subcaps-título (sem elemento_tipo ou nivel < 3 sem unidade)
+        if elemento_tipo is None or elemento_tipo == '':
+            continue
         
         # Calcular quant_total se não existir (soma de A+B+C)
         quant_total = artigo.get('quant_total')

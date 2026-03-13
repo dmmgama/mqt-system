@@ -50,12 +50,18 @@ def map_artigos(artigos: list[dict], supabase_client: Client) -> list[dict]:
     for artigo in artigos:
         capitulo = artigo.get('capitulo')
         elemento_sufixo = artigo.get('elemento_sufixo')
+        nivel = artigo.get('nivel', 3)
         artigo_cod = artigo.get('artigo_cod', 'N/A')
-        
+
+        # Caps (nivel=1) e subcaps-título (nivel=2 sem elemento_sufixo) → sem mapeamento
+        if nivel < 3 or elemento_sufixo is None:
+            artigo['elemento_tipo'] = None
+            continue
+
         # Lookup por (capitulo, elemento_sufixo)
         key = (capitulo, elemento_sufixo)
         elemento_tipo = lookup.get(key)
-        
+
         if elemento_tipo:
             artigo['elemento_tipo'] = elemento_tipo
         else:
