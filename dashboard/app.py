@@ -10,6 +10,29 @@ from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
 from pipeline.ingest_mqt import ingest_mqt
 from validation.indices import calcular_indices
 
+ELEMENTO_LABELS = {
+    "FUNDACAO": "Fundações",
+    "LAJE_FUNDO": "Laje de fundo",
+    "VIGA_FUND": "Vigas de fundação",
+    "PILAR": "Pilares",
+    "NUCLEO": "Núcleos",
+    "PAREDE": "Paredes",
+    "PAREDE_PISC": "Paredes de piscinas",
+    "PAREDE_RES": "Paredes de reservatórios",
+    "CONTENCAO": "Paredes de contenção",
+    "VIGA": "Vigas",
+    "LAJE_MACICA": "Lajes maciças e dobras",
+    "LAJE_ALIG": "Lajes aligeiradas",
+    "RAMPA": "Lajes de rampas",
+    "BANDA": "Bandas",
+    "CAPITEL": "Capitéis",
+    "MURETE": "Muretes e platibandas",
+    "ESCADA": "Escadas betonadas in situ",
+    "MASSAME": "Massame",
+    "MACIÇO": "Maciços e plintos",
+    "OUTRO": "Outros",
+}
+
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -177,7 +200,12 @@ def main():
                     # Emoji por flag
                     flag_map = {"ok": "🟢", "alerta": "🟡", "erro": "🔴"}
                     df_display["Flag"] = df_display["Flag"].map(lambda x: f"{flag_map.get(x, '⚪')} {x}")
-                    
+
+                    # Nomes de elemento legíveis
+                    df_display["Elemento"] = df_display["Elemento"].map(
+                        lambda x: ELEMENTO_LABELS.get(x, x.replace("_", " ").title()) if x else x
+                    )
+
                     st.dataframe(df_display, use_container_width=True, hide_index=True)
     
     # ============================================================
@@ -212,39 +240,86 @@ def main():
                 # Filtros
                 col1, col2 = st.columns(2)
                 
-                # Carregar artigos
+                # Carregar artigos — incluir campo nivel
                 artigos_resp = client.table("mqt_artigos").select(
-                    "artigo_cod, descricao, unidade, elemento_tipo, capitulo, quant_a, quant_b, quant_c, quant_total"
-                ).eq("snapshot_id", snapshot_id_art).execute()
-                
+                    "artigo_cod, descricao, unidade, elemento_tipo, capitulo, nivel, quant_a, quant_b, quant_c, quant_total"
+                ).eq("snapshot_id", snapshot_id_art).order("id").execute()
+
                 if not artigos_resp.data:
                     st.warning("⚠️ Nenhum artigo encontrado.")
                 else:
                     df_artigos = pd.DataFrame(artigos_resp.data)
-                    
+
                     with col1:
-                        capitulos = ["Todos"] + sorted([c for c in df_artigos["capitulo"].unique().tolist() if c is not None])
-                        filtro_capitulo = st.selectbox("Capítulo", capitulos)
-                    
+                        # Filtro capítulo — ordenado numericamente ascendente
+                        caps_raw = [c for c in df_artigos["capitulo"].unique().tolist() if c is not None]
+                        try:
+                            caps_sorted = sorted(caps_raw, key=lambda x: int(x))
+                        except Exception:
+                            caps_sorted = sorted(caps_raw)
+                        filtro_capitulo = st.selectbox("Capítulo", ["Todos"] + caps_sorted)
+
                     with col2:
-                        elementos = ["Todos"] + sorted([e for e in df_artigos["elemento_tipo"].unique().tolist() if e is not None])
+                        elementos = ["Todos"] + sorted([
+                            e for e in df_artigos["elemento_tipo"].unique().tolist() if e is not None
+                        ])
                         filtro_elemento = st.selectbox("Elemento", elementos)
-                    
-                    # Aplicar filtros
+
                     df_filtered = df_artigos.copy()
                     if filtro_capitulo != "Todos":
                         df_filtered = df_filtered[df_filtered["capitulo"] == filtro_capitulo]
                     if filtro_elemento != "Todos":
                         df_filtered = df_filtered[df_filtered["elemento_tipo"] == filtro_elemento]
-                    
-                    # Renomear colunas
-                    df_filtered.columns = [
-                        "Código", "Descrição", "Unidade", "Elemento", "Capítulo",
-                        "Quant A", "Quant B", "Quant C", "Total"
-                    ]
-                    
-                    st.dataframe(df_filtered, use_container_width=True, hide_index=True)
-                    st.caption(f"📊 {len(df_filtered)} artigos")
+
+                    def _fmt_num(v):
+                        if v is None or v == 0 or v == 0.0:
+                            return ""
+                        try:
+                            return f"{float(v):,.2f}".replace(",", "\u00a0")
+                        except Exception:
+                            return str(v)
+
+                    def _row_style(nivel):
+                        if nivel == 1:
+                            return "background:#e8e8e8;font-weight:bold;font-size:13px;"
+                        elif nivel == 2:
+                            return "font-weight:bold;font-size:13px;"
+                        return "font-size:12px;"
+
+                    html = """
+<style>
+.mqt-table{width:100%;border-collapse:collapse;font-family:sans-serif;}
+.mqt-table th{background:#444;color:#fff;padding:6px 8px;text-align:left;font-size:12px;}
+.mqt-table td{padding:4px 8px;border-bottom:1px solid #e0e0e0;vertical-align:top;}
+.mqt-table tr:hover td{background:#f0f4ff;}
+</style>
+<table class='mqt-table'><thead><tr>
+<th>Código</th><th>Descrição</th><th>Un</th><th>Elemento</th>
+<th style='text-align:right'>Quant A</th>
+<th style='text-align:right'>Quant B</th>
+<th style='text-align:right'>Quant C</th>
+<th style='text-align:right'>Total</th>
+</tr></thead><tbody>"""
+                    for _, row in df_filtered.iterrows():
+                        nivel = int(row.get("nivel") or 3)
+                        style = _row_style(nivel)
+                        elem_raw = row.get("elemento_tipo") or ""
+                        elem_label = ELEMENTO_LABELS.get(elem_raw, elem_raw.replace("_", " ").title()) if elem_raw else ""
+                        html += (
+                            f"<tr>"
+                            f"<td style='{style}'>{row.get('artigo_cod','')}</td>"
+                            f"<td style='{style}'>{row.get('descricao','') or ''}</td>"
+                            f"<td style='{style}'>{row.get('unidade','') or ''}</td>"
+                            f"<td style='{style}'>{elem_label}</td>"
+                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_a'))}</td>"
+                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_b'))}</td>"
+                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_c'))}</td>"
+                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_total'))}</td>"
+                            f"</tr>"
+                        )
+                    html += "</tbody></table>"
+                    st.markdown(html, unsafe_allow_html=True)
+                    st.caption(f"📊 {len(df_filtered)} linhas")
     
     # ============================================================
     # TAB 4 — GESTÃO

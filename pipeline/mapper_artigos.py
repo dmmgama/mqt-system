@@ -59,14 +59,18 @@ def map_artigos(artigos: list[dict], supabase_client: Client) -> list[dict]:
             continue
 
         # Lookup por (capitulo, elemento_sufixo)
+        CAPS_COM_MAPEAMENTO = {'5', '6', '7'}
+
         key = (capitulo, elemento_sufixo)
         elemento_tipo = lookup.get(key)
 
         if elemento_tipo:
             artigo['elemento_tipo'] = elemento_tipo
-        else:
+        elif str(capitulo) in CAPS_COM_MAPEAMENTO:
             artigo['elemento_tipo'] = 'OUTRO'
             print(f"⚠️  Sem mapeamento: {artigo_cod} | cap={capitulo} elem_suf={elemento_sufixo}")
+        else:
+            artigo['elemento_tipo'] = None
     
     return artigos
 
