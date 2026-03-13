@@ -3,12 +3,13 @@ Parser de ficheiros Excel MQT
 Lê ficheiros Excel JSJ formato MQT e extrai artigos
 """
 import re
+from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional
 from openpyxl import load_workbook
 
 
-def parse_mqt(excel_path: str) -> List[Dict]:
+def parse_mqt(excel_path) -> List[Dict]:
     """
     Faz parse de um ficheiro Excel MQT JSJ
     
@@ -19,7 +20,7 @@ def parse_mqt(excel_path: str) -> List[Dict]:
     - Artigos reais: col D é string formato 'X.Y.Z' (não float)
     
     Args:
-        excel_path: Caminho completo para o ficheiro Excel
+        excel_path: Caminho para ficheiro Excel (str) ou file-like object (upload)
         
     Returns:
         Lista de dicts, um por artigo, com campos:
@@ -30,14 +31,13 @@ def parse_mqt(excel_path: str) -> List[Dict]:
             preco_unit, total_eur
         }
     """
-    print(f"📖 A ler ficheiro: {excel_path}")
-    
-    # Verificar se ficheiro existe
-    if not Path(excel_path).exists():
-        raise FileNotFoundError(f"Ficheiro não encontrado: {excel_path}")
-    
-    # Carregar workbook com data_only=True (obter valores calculados)
-    wb = load_workbook(excel_path, data_only=True)
+    if hasattr(excel_path, 'read'):
+        # file-like object (Streamlit UploadedFile)
+        excel_path.seek(0)
+        wb = load_workbook(BytesIO(excel_path.read()), data_only=True)
+    else:
+        # path string
+        wb = load_workbook(excel_path, data_only=True)
     
     # Verificar se sheet existe
     sheet_name = '02.MQT'

@@ -9,7 +9,6 @@ from supabase import create_client, Client
 from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
 from pipeline.ingest_mqt import ingest_mqt
 from validation.indices import calcular_indices
-import os
 
 
 @st.cache_resource
@@ -41,9 +40,9 @@ def main():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            excel_path = st.text_input(
-                "Caminho do ficheiro Excel",
-                placeholder="C:/path/to/MQT.xlsx"
+            ficheiro = st.file_uploader(
+                "Seleccionar ficheiro MQT",
+                type=["xlsx", "xls"]
             )
         
         with col2:
@@ -59,10 +58,8 @@ def main():
             )
         
         if st.button("🚀 Processar MQT", type="primary"):
-            if not excel_path or not project_name:
-                st.error("❌ Preencha o caminho do Excel e o nome do projecto")
-            elif not os.path.exists(excel_path):
-                st.error(f"❌ Ficheiro não encontrado: {excel_path}")
+            if ficheiro is None or not project_name:
+                st.error("❌ Seleccione um ficheiro Excel e indique o nome do projecto")
             else:
                 with st.spinner("A processar..."):
                     try:
@@ -74,15 +71,13 @@ def main():
                             st.info(f"ℹ️ Projecto existente: {project_name} (ID: {project_id})")
                         else:
                             insert_resp = client.table("projects").insert({
-                                "nome": project_name,
-                                "cliente": "N/D",
-                                "localizacao": "N/D"
+                                "nome": project_name
                             }).execute()
                             project_id = insert_resp.data[0]["id"]
                             st.success(f"✅ Projecto criado: {project_name} (ID: {project_id})")
                         
                         # 2. Ingestão
-                        snapshot_id = ingest_mqt(excel_path, project_id, fase, client)
+                        snapshot_id = ingest_mqt(ficheiro, project_id, fase, client)
                         
                         # 3. Calcular índices
                         indices = calcular_indices(snapshot_id, client)

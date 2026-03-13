@@ -32,10 +32,14 @@ def ingest_mqt(excel_path: str, project_id: str,
     print(f"🏢 Projecto ID: {project_id}")
     print(f"📋 Fase: {fase}\n")
     
-    # 1. Verificar se o ficheiro existe
-    excel_file = Path(excel_path)
-    if not excel_file.exists():
-        raise FileNotFoundError(f"Ficheiro não encontrado: {excel_path}")
+    # 1. Aceitar path string OU file-like object
+    if hasattr(excel_path, 'read'):
+        ficheiro_ref = getattr(excel_path, 'name', 'upload.xlsx')
+    else:
+        excel_file = Path(excel_path)
+        if not excel_file.exists():
+            raise FileNotFoundError(f"Ficheiro não encontrado: {excel_path}")
+        ficheiro_ref = excel_file.name
     
     # 2. Parse do Excel MQT
     print("📖 A fazer parse do Excel...")
@@ -47,13 +51,24 @@ def ingest_mqt(excel_path: str, project_id: str,
     artigos_mapped = map_artigos(artigos, supabase_client)
     print(f"✅ {len(artigos_mapped)} artigos mapeados\n")
     
-    # 4. Criar snapshot
+    # 4. Verificar snapshot duplicado
+    existing = supabase_client.table('mqt_snapshots')\
+        .select('id')\
+        .eq('project_id', project_id)\
+        .eq('fase', fase)\
+        .execute()
+    
+    if existing.data:
+        print(f"⚠️  Snapshot já existe para esta fase. A usar existente.")
+        return existing.data[0]['id']
+    
+    # 5. Criar snapshot
     print("💾 A criar snapshot em mqt_snapshots...")
     snapshot_data = {
         'project_id': project_id,
         'fase': fase,
         'data_upload': date.today().isoformat(),
-        'ficheiro_ref': excel_file.name,
+        'ficheiro_ref': ficheiro_ref,
         'status': 'activo'
     }
     
@@ -65,7 +80,7 @@ def ingest_mqt(excel_path: str, project_id: str,
     snapshot_id = result.data[0]['id']
     print(f"✅ Snapshot criado: {snapshot_id}\n")
     
-    # 5. Preparar dados para mqt_artigos (bulk insert)
+    # 6. Preparar dados para mqt_artigos (bulk insert)
     print("📝 A preparar artigos para inserção...")
     artigos_db = []
     for artigo in artigos_mapped:
@@ -86,7 +101,7 @@ def ingest_mqt(excel_path: str, project_id: str,
         }
         artigos_db.append(artigo_db)
     
-    # 6. Bulk insert em mqt_artigos
+    # 7. Bulk insert em mqt_artigos
     print(f"💾 A inserir {len(artigos_db)} artigos em mqt_artigos...")
     result = supabase_client.table('mqt_artigos').insert(artigos_db).execute()
     
