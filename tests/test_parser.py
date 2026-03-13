@@ -1,7 +1,7 @@
 """
 Testes unitários para o parser de Excel MQT
 """
-import pytest
+# import pytest
 from pipeline.parser_excel import (
     extract_capitulo_info,
     extract_classe_material,
@@ -128,4 +128,63 @@ def test_validate_artigos_invalid_total():
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    # Testes unitários pytest
+    # pytest.main([__file__, "-v"])
+    
+    # Teste de integração com parser + mapper
+    from pipeline.parser_excel import parse_mqt
+    from pipeline.mapper_artigos import map_artigos
+    from supabase import create_client
+    from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
+    
+    print("\n" + "="*70)
+    print("TESTE DE INTEGRAÇÃO: Parser + Mapper")
+    print("="*70 + "\n")
+    
+    # Parse do Excel
+    print("📂 Parsing Excel...")
+    artigos = parse_mqt('data/samples/MQT_Amorim.xlsx')
+    print(f"✅ Parsed {len(artigos)} artigos\n")
+    
+    # Criar cliente Supabase
+    print("🔌 Conectando ao Supabase...")
+    client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    print("✅ Conectado\n")
+    
+    # Mapear artigos
+    print("🗺️  Mapeando artigos...\n")
+    artigos_mapped = map_artigos(artigos, client)
+    
+    # Verificar alguns artigos conhecidos
+    print("\n" + "="*70)
+    print("AMOSTRA DE ARTIGOS MAPEADOS")
+    print("="*70 + "\n")
+    
+    for a in artigos_mapped[:10]:  # Primeiros 10
+        print(f"{a['artigo_cod']:8s} → {a['elemento_tipo']:15s} | {a['descricao'][:50]}")
+    
+    # Listar artigos sem mapeamento (OUTRO)
+    print("\n" + "="*70)
+    print("ARTIGOS SEM MAPEAMENTO (elemento_tipo='OUTRO')")
+    print("="*70 + "\n")
+    
+    outros = [a for a in artigos_mapped if a['elemento_tipo'] == 'OUTRO']
+    print(f"Total sem mapeamento: {len(outros)} de {len(artigos_mapped)}\n")
+    
+    for a in outros:
+        desc_curta = a['descricao'][:60] if a['descricao'] else "N/A"
+        print(f"  {a['artigo_cod']:8s} | cap={a['capitulo']:2s} suf={a['sufixo']:5s} | {desc_curta}")
+    
+    # Estatísticas por elemento_tipo
+    print("\n" + "="*70)
+    print("ESTATÍSTICAS POR ELEMENTO_TIPO")
+    print("="*70 + "\n")
+    
+    from collections import Counter
+    elemento_counts = Counter(a['elemento_tipo'] for a in artigos_mapped)
+    
+    for elemento_tipo, count in sorted(elemento_counts.items(), key=lambda x: x[1], reverse=True):
+        pct = (count / len(artigos_mapped)) * 100
+        print(f"  {elemento_tipo:15s}: {count:3d} ({pct:5.1f}%)")
+    
+    print("\n" + "="*70)
