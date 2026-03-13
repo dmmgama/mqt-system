@@ -5,74 +5,136 @@ Orquestra o processo completo: Excel → Parser → Mapper → Supabase
 import argparse
 import sys
 from pathlib import Path
-from supabase import create_client
-from config import SUPABASE_URL, SUPABASE_SERVICE_KEY
-from pipeline.parser_excel import parse_mqt_excel
-from pipeline.mapper_artigos import map_artigo_to_elemento
+from datetime import date
+from supabase import Client
+from pipeline.parser_excel import parse_mqt
+from pipeline.mapper_artigos import map_artigos
 
 
-def ingest_mqt_file(excel_path: str, project_id: str, fase: str = "Projecto", 
-                    entrega: str = "Final", notas: str = ""):
+def ingest_mqt(excel_path: str, project_id: str, 
+               fase: str, supabase_client: Client) -> str:
     """
     Ingere um ficheiro Excel MQT para a base de dados Supabase
     
     Args:
         excel_path: Caminho completo para o ficheiro Excel MQT
-        project_id: ID do projecto na tabela projects (SSOT)
-        fase: Fase do projecto (ex: "Projecto", "Obra")
-        entrega: Tipo de entrega (ex: "Final", "Preliminar", "Revisão")
-        notas: Notas adicionais sobre este snapshot
+        project_id: UUID do projecto na tabela projects
+        fase: Fase do projecto - 'EP' | 'Anteprojeto' | 'CE' | 'Execucao'
+        supabase_client: Cliente Supabase autenticado
+        
+    Returns:
+        snapshot_id: UUID do snapshot criado
     """
-    print(f"📊 Iniciando ingestão de MQT...")
-    print(f"   Ficheiro: {excel_path}")
-    print(f"   Projecto ID: {project_id}")
+    print(f"\n{'='*70}")
+    print(f"INGESTÃO MQT → SUPABASE")
+    print(f"{'='*70}\n")
+    print(f"📂 Ficheiro: {excel_path}")
+    print(f"🏢 Projecto ID: {project_id}")
+    print(f"📋 Fase: {fase}\n")
     
     # 1. Verificar se o ficheiro existe
-    if not Path(excel_path).exists():
-        print(f"❌ Ficheiro não encontrado: {excel_path}")
-        sys.exit(1)
+    excel_file = Path(excel_path)
+    if not excel_file.exists():
+        raise FileNotFoundError(f"Ficheiro não encontrado: {excel_path}")
     
-    # 2. Conectar ao Supabase
-    print("🔌 A conectar ao Supabase...")
-    client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    # 2. Parse do Excel MQT
+    print("📖 A fazer parse do Excel...")
+    artigos = parse_mqt(excel_path)
+    print(f"✅ {len(artigos)} artigos parseados\n")
     
-    # 3. Parse do Excel
-    print("📖 A fazer parse do Excel MQT...")
-    # TODO: Implementar parse_mqt_excel
-    # df_artigos = parse_mqt_excel(excel_path)
+    # 3. Mapear artigos para elemento_tipo
+    print("🗺️  A mapear artigos para elemento_tipo...")
+    artigos_mapped = map_artigos(artigos, supabase_client)
+    print(f"✅ {len(artigos_mapped)} artigos mapeados\n")
     
     # 4. Criar snapshot
-    print("💾 A criar snapshot...")
-    # TODO: Inserir na tabela mqt_snapshots
+    print("💾 A criar snapshot em mqt_snapshots...")
+    snapshot_data = {
+        'project_id': project_id,
+        'fase': fase,
+        'data_upload': date.today().isoformat(),
+        'ficheiro_ref': excel_file.name,
+        'status': 'activo'
+    }
     
-    # 5. Mapear e inserir artigos
-    print("🗺️  A mapear e inserir artigos...")
-    # TODO: Para cada artigo, mapear elemento_tipo e inserir em mqt_artigos
+    result = supabase_client.table('mqt_snapshots').insert(snapshot_data).execute()
     
-    # 6. Calcular índices
-    print("📐 A calcular índices...")
-    # TODO: Chamar validation.indices
+    if not result.data or len(result.data) == 0:
+        raise Exception("Erro ao criar snapshot: nenhum ID retornado")
     
-    print("✅ Ingestão completa!")
+    snapshot_id = result.data[0]['id']
+    print(f"✅ Snapshot criado: {snapshot_id}\n")
+    
+    # 5. Preparar dados para mqt_artigos (bulk insert)
+    print("📝 A preparar artigos para inserção...")
+    artigos_db = []
+    for artigo in artigos_mapped:
+        artigo_db = {
+            'snapshot_id': snapshot_id,
+            'capitulo': artigo.get('capitulo'),
+            'subcapitulo': artigo.get('subcapitulo'),
+            'artigo_cod': artigo.get('artigo_cod'),
+            'sufixo': artigo.get('sufixo'),
+            'descricao': artigo.get('descricao'),
+            'unidade': artigo.get('unidade'),
+            'classe_material': artigo.get('classe_material'),
+            'elemento_tipo': artigo.get('elemento_tipo'),
+            'quant_a': artigo.get('quant_a'),
+            'quant_b': artigo.get('quant_b'),
+            'quant_c': artigo.get('quant_c'),
+            'quant_total': artigo.get('quant_total')
+        }
+        artigos_db.append(artigo_db)
+    
+    # 6. Bulk insert em mqt_artigos
+    print(f"💾 A inserir {len(artigos_db)} artigos em mqt_artigos...")
+    result = supabase_client.table('mqt_artigos').insert(artigos_db).execute()
+    
+    if not result.data:
+        raise Exception("Erro ao inserir artigos: nenhum dado retornado")
+    
+    print(f"✅ {len(result.data)} artigos inseridos\n")
+    
+    print(f"{'='*70}")
+    print(f"✅ INGESTÃO COMPLETA")
+    print(f"{'='*70}")
+    print(f"Snapshot ID: {snapshot_id}")
+    print(f"Artigos: {len(result.data)}")
+    print(f"{'='*70}\n")
+    
+    return snapshot_id
 
 
 def main():
+    """CLI para ingestão de MQT via linha de comando"""
+    from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
+    from supabase import create_client
+    
     parser = argparse.ArgumentParser(description="Ingestão de ficheiros MQT para Supabase")
     parser.add_argument("--file", required=True, help="Caminho para o ficheiro Excel MQT")
-    parser.add_argument("--project-id", required=True, help="ID do projecto (FK para projects.id)")
-    parser.add_argument("--fase", default="Projecto", help="Fase do projecto")
-    parser.add_argument("--entrega", default="Final", help="Tipo de entrega")
-    parser.add_argument("--notas", default="", help="Notas sobre este snapshot")
+    parser.add_argument("--project-id", required=True, help="UUID do projecto (FK para projects.id)")
+    parser.add_argument("--fase", required=True, 
+                       choices=['EP', 'Anteprojeto', 'CE', 'Execucao'],
+                       help="Fase do projecto")
     
     args = parser.parse_args()
     
-    ingest_mqt_file(
-        excel_path=args.file,
-        project_id=args.project_id,
-        fase=args.fase,
-        entrega=args.entrega,
-        notas=args.notas
-    )
+    # Conectar ao Supabase
+    client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    
+    # Executar ingestão
+    try:
+        snapshot_id = ingest_mqt(
+            excel_path=args.file,
+            project_id=args.project_id,
+            fase=args.fase,
+            supabase_client=client
+        )
+        print(f"\n✅ Snapshot criado com sucesso: {snapshot_id}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Erro durante a ingestão: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
