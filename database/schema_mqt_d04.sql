@@ -292,4 +292,23 @@ INSERT INTO elemento_map (capitulo, sufixo, elemento_tipo, artigo_desc_ref, proj
 ('7', '21',   'MACIÇO',         'Maciços e Plintos',                  NULL),
 ('7', '99',   'OUTRO',          'Outros elementos',                   NULL)
 
+-- CAP 8 — Pré-esforço
+INSERT INTO elemento_map 
+  (capitulo, sufixo, elemento_tipo, artigo_desc_ref, projeto_id)
+VALUES
+('8', '1',   'PRE_ESFORCO', 'Pré-esforço Fundações',       NULL),
+('8', '4',   'PRE_ESFORCO', 'Pré-esforço Pilares',         NULL),
+('8', '10',  'PRE_ESFORCO', 'Pré-esforço Vigas',           NULL),
+('8', '11',  'PRE_ESFORCO', 'Pré-esforço Lajes maciças',   NULL),
+('8', '15',  'PRE_ESFORCO', 'Pré-esforço Bandas',          NULL),
+('8', '99',  'PRE_ESFORCO', 'Pré-esforço outros',          NULL),
+-- CAP 10 — Aço estrutural
+('10', '1',  'ACO_ESTRUTURAL', 'Vigas metálicas',           NULL),
+('10', '2',  'ACO_ESTRUTURAL', 'Pilares metálicos',         NULL),
+('10', '99', 'ACO_ESTRUTURAL', 'Estrutura metálica outros', NULL),
+-- CAP 11 — Madeira lamelada
+('11', '1',  'MADEIRA', 'Vigas madeira lamelada',           NULL),
+('11', '2',  'MADEIRA', 'Pilares madeira lamelada',         NULL),
+('11', '99', 'MADEIRA', 'Madeira outros',                   NULL)
+
 ON CONFLICT DO NOTHING;

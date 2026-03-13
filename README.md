@@ -1,7 +1,32 @@
 # MQT-SYSTEM — README PARA AGENTE IDE
-**Versão:** 1.0 · **Data:** 2026-03-13  
+**Versão:** 1.3 · **Data:** 2026-03-13  
 **Para:** GitHub Copilot / Cursor / agente VS Code  
-**Contexto:** Setup inicial do repositório `mqt-system`
+**Contexto:** Pipeline completo funcional — próximo passo: Streamlit dashboard
+
+---
+
+## ESTADO ACTUAL DO PROJECTO
+
+| Componente | Estado |
+|---|---|
+| Repositório Git (`mqt-system`) | ✅ Criado |
+| `.env` + credenciais Supabase | ✅ Configurado |
+| `config/settings.py` | ✅ Feito |
+| `requirements.txt` + venv | ✅ Instalado |
+| Schema Supabase (7 tabelas) | ✅ Corrido — instância MVP activa |
+| `tests/test_connection.py` | ✅ Passou |
+| `pipeline/parser_excel.py` | ✅ Funcional — 50 artigos parseados |
+| `pipeline/mapper_artigos.py` | ✅ Funcional — 90% mapeados (45/50) |
+| `pipeline/ingest_mqt.py` | ✅ Funcional — bulk insert Supabase OK |
+| `validation/indices.py` | ✅ Funcional — índices calculados e persistidos |
+| Streamlit dashboard | 🔜 **PRÓXIMO PASSO** |
+
+### Dados reais na DB
+
+- **Projecto de teste:** AMORIM_TESTE
+- **Snapshot ID:** `5dff81b4-abdf-43d2-bef3-c62c93e158b1`
+- **mqt_artigos:** 50 linhas inseridas
+- **mqt_indices:** calculados para todos os elemento_tipo com betão/aço/cofragem
 
 ---
 
@@ -9,11 +34,10 @@
 
 Sistema Python para ingestão, validação e análise de **Mapas de Quantidades (MQT)** de projetos de estruturas de engenharia civil (Portugal).
 
-- Lê ficheiros Excel MQT de um servidor de empresa (path local)
-- Escreve dados normalizados numa instância **Supabase dedicada** (nova instância independente — D08)
-- A instância SSOT está temporariamente indisponível; este sistema corre de forma autónoma no MVP
-- Inclui tabela `projects` local mínima — será substituída por FK para o SSOT quando restaurado
-- Futuro: Streamlit dashboard, análise com LLM API, ligação ao SSOT (Camada 2)
+- Lê ficheiros Excel MQT do servidor da empresa
+- Normaliza artigos por elemento estrutural (PILAR, VIGA, LAJE_MACICA, etc.)
+- Calcula índices de validação: A/V (kg aço/m³ betão), A/C (kg/m²), V/C (m³/m²)
+- Persiste tudo em Supabase para consulta via dashboard
 
 ---
 
@@ -22,252 +46,162 @@ Sistema Python para ingestão, validação e análise de **Mapas de Quantidades 
 | Componente | Tecnologia |
 |---|---|
 | Base de dados | Supabase (Postgres) — instância dedicada MVP (D08) |
-| Ingestão | Python 3.11+ + pandas + openpyxl |
+| Ingestão | Python 3.11+ + openpyxl |
 | Credenciais | python-dotenv (.env local, nunca commitar) |
-| Interface futura | Streamlit |
+| Interface | Streamlit — **a implementar agora** |
 | Repositório | Git separado do SSOT |
 
 ---
 
-## ESTRUTURA DE PASTAS A CRIAR
+## ESTRUTURA DE PASTAS
 
 ```
 mqt-system/
-├── .env                        ← credenciais (NÃO commitar — está no .gitignore)
+├── .env                        ← credenciais (NÃO commitar)
 ├── .gitignore
 ├── requirements.txt
-├── README.md                   ← este ficheiro
+├── README.md
 ├── config/
-│   └── settings.py             ← lê .env, expõe constantes
+│   └── settings.py             ← ✅ lê .env, expõe SUPABASE_URL, SUPABASE_SERVICE_KEY
 ├── database/
-│   ├── schema_mqt_d04.sql      ← schema das 6 tabelas (copiar ficheiro externo)
+│   ├── schema_mqt_d04.sql      ← ✅ schema 7 tabelas + seeds (já corrido)
 │   └── seeds/
-│       └── capitulo_map.sql    ← seed estático (copiar ficheiro externo)
+│       └── capitulo_map.sql
 ├── pipeline/
 │   ├── __init__.py
-│   ├── ingest_mqt.py           ← script principal de ingestão
-│   ├── parser_excel.py         ← leitura e normalização do Excel MQT
-│   └── mapper_artigos.py       ← lógica artigo_cod → (capitulo, sufixo) → elemento_tipo
+│   ├── parser_excel.py         ← ✅ parse Excel → lista de artigos
+│   ├── mapper_artigos.py       ← ✅ lookup elemento_map Supabase
+│   └── ingest_mqt.py           ← ✅ pipeline completo → Supabase
 ├── validation/
 │   ├── __init__.py
-│   └── indices.py              ← cálculo de índices (kg/m³, m²/m³) + flags
+│   └── indices.py              ← ✅ calcula A/V, A/C, V/C + persiste mqt_indices
+├── dashboard/
+│   └── app.py                  ← 🔜 Streamlit app (a criar)
 ├── data/
-│   └── samples/                ← Excels de teste ANONIMIZADOS (não commitar dados reais)
+│   └── samples/
 └── tests/
-    └── test_parser.py
+    ├── test_connection.py      ← ✅
+    ├── test_parser.py          ← ✅
+    └── test_ingest.py          ← ✅
 ```
 
 ---
 
-## INSTRUÇÕES DE SETUP (executar por ordem)
+## PRÓXIMO PASSO — `dashboard/app.py` (Streamlit)
 
-### 1. Inicializar repositório Git
+### Objectivo
 
-```bash
-mkdir mqt-system
-cd mqt-system
-git init
-git branch -M main
-```
+Dashboard de validação de MQT. O utilizador carrega um Excel, o sistema ingere e mostra os índices com flags.
 
-### 2. Criar .gitignore
+### Páginas / secções (single-page, tabs ou sidebar)
 
-Criar ficheiro `.gitignore` com o seguinte conteúdo:
+**Tab 1 — Ingestão**
+- Input: path do ficheiro Excel (text input) + nome projecto + fase (selectbox: EP/Anteprojeto/CE/Execucao)
+- Botão "Processar MQT"
+- Ao clicar:
+  1. Criar projecto em `projects` se não existir (lookup por nome)
+  2. Correr `ingest_mqt()` 
+  3. Correr `calcular_indices()`
+  4. Mostrar: "✅ X artigos ingeridos | Y mapeados | Z OUTRO"
+- Mostrar lista de artigos OUTRO (aviso amarelo) para o utilizador verificar
 
-```
-.env
-*.env
-data/
-__pycache__/
-*.pyc
-.DS_Store
-*.xlsx
-*.xls
-```
+**Tab 2 — Índices**
+- Selectbox: escolher projecto + snapshot (fase + data)
+- Tabela de índices por elemento_tipo:
 
-> ⚠️ CRÍTICO: O `.env` com credenciais Supabase e os ficheiros Excel reais (pasta `data/`) **nunca** devem ser commitados.
+| Elemento | Betão m³ | Aço kg | A/V kg/m³ | Cofragem m² | V/C m³/m² | Flag |
+|----------|----------|--------|-----------|-------------|-----------|------|
 
-### 3. Criar requirements.txt
+- Flag colorida: 🟢 ok / 🟡 alerta / 🔴 erro
+- Por agora flags são todas 'ok' — thresholds automáticos em iteração futura
 
-```
-supabase==2.3.0
-pandas==2.2.0
-openpyxl==3.1.2
-python-dotenv==1.0.0
-streamlit==1.32.0
-```
+**Tab 3 — Artigos**
+- Tabela completa dos artigos do snapshot seleccionado
+- Filtros: por capitulo, por elemento_tipo
+- Colunas: artigo_cod, descricao, unidade, elemento_tipo, quant_a, quant_b, quant_c, quant_total
 
-### 4. Instalar dependências
+### Notas de implementação
 
-```bash
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
+- Criar pasta `dashboard/` e ficheiro `dashboard/app.py`
+- Correr com: `streamlit run dashboard/app.py`
+- Supabase client inicializado uma vez com `@st.cache_resource`
+- Queries Supabase para Tab 2:
+  ```python
+  # Projectos disponíveis
+  client.table("projects").select("id, nome").execute()
+  
+  # Snapshots do projecto
+  client.table("mqt_snapshots")
+        .select("id, fase, data_upload, status")
+        .eq("project_id", project_id)
+        .execute()
+  
+  # Índices do snapshot
+  client.table("mqt_indices")
+        .select("*")
+        .eq("snapshot_id", snapshot_id)
+        .execute()
+  
+  # Artigos do snapshot
+  client.table("mqt_artigos")
+        .select("artigo_cod, descricao, unidade, elemento_tipo, quant_a, quant_b, quant_c, quant_total")
+        .eq("snapshot_id", snapshot_id)
+        .execute()
+  ```
+- Usar `st.dataframe()` para tabelas — não `st.table()`
+- Não usar `st.form()` — usar botões directos com `st.button()`
 
-### 5. Criar .env (NÃO commitar)
+### Dados de teste disponíveis
 
-```env
-SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...    # service role key (não a anon key)
-MQT_EXCEL_PATH=\\\\servidor\\partilha\\MQT   # UNC path ou path local
-```
+Projecto AMORIM_TESTE já na DB com snapshot e índices calculados.
+Usar para validar o dashboard antes de testar com Excel novo.
 
-### 6. Criar config/settings.py
+---
+
+## PIPELINE — Referência Rápida
 
 ```python
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-MQT_EXCEL_PATH = os.getenv("MQT_EXCEL_PATH")
-
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise ValueError("Credenciais Supabase em falta no .env")
-```
-
-### 7. Testar ligação Supabase
-
-Criar `tests/test_connection.py`:
-
-```python
+# Ingestão completa de um Excel novo:
 from supabase import create_client
 from config.settings import SUPABASE_URL, SUPABASE_SERVICE_KEY
+from pipeline.ingest_mqt import ingest_mqt
+from validation.indices import calcular_indices
 
-def test_connection():
-    client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    # Testar que as tabelas MQT existem
-    result = client.table("mqt_snapshots").select("id").limit(1).execute()
-    print("✅ Ligação Supabase OK")
-    print(f"   mqt_snapshots: {result}")
-
-if __name__ == "__main__":
-    test_connection()
+client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+snapshot_id = ingest_mqt('path/to/MQT.xlsx', project_id, 'EP', client)
+indices = calcular_indices(snapshot_id, client)
 ```
-
-Executar: `python tests/test_connection.py`
-
-> ⚠️ Este teste só funciona DEPOIS de o `schema_mqt_d04.sql` ter sido corrido no Supabase SQL Editor.
 
 ---
 
-## TABELAS SUPABASE (MVP — instância dedicada)
-
-Esta instância Supabase é nova e independente (decisão D08 — SSOT temporariamente indisponível).  
-Inclui uma tabela `projects` local mínima que substituirá a FK para o SSOT quando este for restaurado.
-
-**Migração futura para SSOT (Camada 2):**
-1. Apagar tabela `projects` local
-2. Adicionar FK: `mqt_snapshots.project_id → ssot.projects.id`
-3. Migrar dados: mapear `projects.id` locais para IDs SSOT
-4. Zero reescrita no pipeline Python — só schema muda
+## TABELAS SUPABASE
 
 ```
-projects          — tabela local mínima (substitui FK SSOT no MVP)
-mqt_snapshots     — 1 snapshot por projecto × fase × entrega
-mqt_artigos       — artigos individuais do Excel MQT
-mqt_indices       — índices calculados (kg/m³, m²/m³) + flags + notas
-elemento_map      — mapeamento (capitulo, sufixo) → elemento_tipo
-capitulo_map      — capítulo → tipo de quantidade + unidade (seed estático)
-jsj_precos_ref    — preços unitários de referência JSJ
+projects          — projectos (local MVP, substituirá FK SSOT em Camada 2)
+mqt_snapshots     — 1 linha por projecto × fase × entrega
+mqt_artigos       — artigos individuais (50 linhas no Amorim)
+mqt_indices       — índices calculados por elemento_tipo + flag
+elemento_map      — (capitulo, sufixo) → elemento_tipo  [~82 rows com caps 8/10/11]
+capitulo_map      — capítulo → tipo quantidade + unidade [12 rows]
+jsj_precos_ref    — preços unitários JSJ [vazio — preencher manualmente]
 ```
 
-Chave de ligação entre tabelas: `mqt_snapshots.project_id` = FK para `projects.id` (local, MVP).
-
-### Lógica de mapeamento artigos (IMPORTANTE)
-
-O código de artigo do Excel (ex: `5.5.4`, `6.2.4.1`, `7.1.1.2`) é parseado assim:
-
-```
-5.5.4   → capitulo=5, subcapitulo=5.5, sufixo=4
-6.2.4.1 → capitulo=6, subcapitulo=6.2, sufixo=4.1
-7.1.1.2 → capitulo=7, subcapitulo=7.1, sufixo=1.2
-```
-
-- **capitulo** = 1º segmento → identifica tipo de trabalho (5=betão, 6=cofragem, 7=aço)
-- **subcapitulo** = 1º + 2º segmento → classe de material (ex: C25/30, C30/37)
-- **sufixo** = restantes segmentos → identifica o elemento estrutural
-
-O sufixo é a chave para o `elemento_map`. O mesmo sufixo `.4` no capítulo `5` mapeia sempre para `PILAR` independentemente da classe de betão.
-
-### Lista de elemento_tipo válidos
-
+### elemento_tipo válidos
 ```
 FUNDACAO | MACIÇO_ESTACAS | LAJE_FUNDO | VIGA_FUND | PILAR | NUCLEO |
 PAREDE | PAREDE_PISC | PAREDE_RES | CONTENCAO | VIGA | LAJE_MACICA |
 LAJE_ALIG | RAMPA | LAJE_PISC | BANDA | CAPITEL | MURETE | ESCADA |
-MASSAME | MACIÇO | FUND_INDIRETA | PRE_ESFORCO | MOLDE_ALIG | OUTRO
+MASSAME | MACIÇO | FUND_INDIRETA | PRE_ESFORCO | ACO_ESTRUTURAL |
+MADEIRA | MOLDE_ALIG | OUTRO
 ```
-
-### Capítulos do MQT JSJ
-
-| cap | tipo | unidade | descrição |
-|-----|------|---------|-----------|
-| 3 | mov_terras | m³ | Movimentação de Terras |
-| 4 | fund_indireta | ml/m³/kg | Fundações Indirectas |
-| 5 | betao | m³ | Betões |
-| 6 | cofragem | m² | Cofragem |
-| 7 | aco_ord | kg | Armaduras Ordinárias |
-| 8 | aco_activo | kg | Armaduras Activas (Pré-esforço) |
-| 9 | prefabricado | m³ | Pré-fabricados |
-| 10 | aco_estrutural | kg | Estrutura Metálica |
-| 11 | madeira | m³ | Estrutura de Madeira |
-| 12 | pavimento | m²/m³ | Pavimento Térreo |
-| 13 | molde_alig | m² | Moldes de Aligeiramento |
-| 15 | diversos | vg | Diversos |
-
----
-
-## DIMENSÕES DOS ARTIGOS
-
-Cada artigo tem 3 dimensões de quantidade:
-- `quant_a` — Fundações (pisos tipo `fundacao`)
-- `quant_b` — Piso térreo (pisos tipo `terreo`)
-- `quant_c` — Pisos elevados (pisos tipo `elevado` + `cobertura`)
-- `quant_total` — Soma automática (a + b + c)
-
-Esta separação permite benchmark por zona estrutural, não apenas por projecto global.
-
----
-
-## FICHEIROS EXTERNOS A COPIAR (fornecidos separadamente)
-
-Após criar a estrutura de pastas, copiar estes ficheiros para os locais indicados:
-
-| Ficheiro | Destino |
-|---------|---------|
-| `schema_mqt_d04.sql` | `database/schema_mqt_d04.sql` |
-| `KB-01_Contexto_Empresa.md` | Referência só — não entra no repo |
-| `KB-03_Decisoes_Arquitecturais.md` | Referência só — não entra no repo |
-| `KB-05_Indices_Referencia.md` | Referência só — não entra no repo |
-
-> O `schema_mqt_d04.sql` deve ser corrido no **Supabase SQL Editor da instância MVP** ANTES de qualquer teste de ligação.
-> Esta é uma instância nova e dedicada ao MQT (D08) — não a instância do SSOT.
-
----
-
-## PRÓXIMOS PASSOS DE DESENVOLVIMENTO (por ordem)
-
-1. **[AGORA]** Setup estrutura + Git + .env + requirements → testar ligação Supabase
-2. **[A SEGUIR]** Implementar `parser_excel.py` — ler Excel MQT real (projecto Amorim)
-3. **[A SEGUIR]** Implementar `mapper_artigos.py` — parse artigo_cod + lookup elemento_map
-4. **[A SEGUIR]** Implementar `ingest_mqt.py` — pipeline completo Excel → Supabase
-5. **[DEPOIS]** `validation/indices.py` — cálculo índices + flags automáticas
-6. **[DEPOIS]** Streamlit dashboard básico — visualização snapshots + índices
 
 ---
 
 ## NOTAS IMPORTANTES
 
-- **Python mínimo:** 3.11
-- **Supabase key:** Usar `service_role` key (não `anon`) — o pipeline corre server-side
-- **Instância Supabase:** Nova instância dedicada ao MQT (D08) — não a do SSOT
-- **Tabela projects:** Local e mínima no MVP — FK para SSOT adicionada em Camada 2
-- **Excel:** O ficheiro Excel MQT fica SEMPRE no servidor da empresa. O script lê via path (local ou UNC). Nunca mover o Excel para o repo.
-- **Dados reais:** Nunca commitar Excels reais. A pasta `data/` está no `.gitignore`.
-- **Tabelas SSOT:** Não existem nesta instância MVP — não referenciar `projects`, `blocks`, `floors`, `zones`, `geo_horizons`, `project_files` do SSOT.
-- **Estimativas de custo** (preço × quantidade) são calculadas on-the-fly — nunca persistidas na DB.
-- **Alerta de preços:** Se `jsj_precos_ref.data_actualizacao` > 12 meses, mostrar aviso de preço desactualizado na interface.
+- **Supabase key:** `service_role` (não `anon`) — nunca expor no frontend
+- **Instância:** Dedicada ao MQT (D08) — não é a do SSOT
+- **Excel:** Fica no servidor da empresa — nunca commitar
+- **Dados reais:** Pasta `data/` no `.gitignore`
+- **Estimativas de custo:** On-the-fly apenas — nunca persistidas
+- **SSOT:** Tabelas `projects/blocks/floors/zones` não existem nesta instância
