@@ -1,74 +1,160 @@
 """
 Parser de ficheiros Excel MQT
-Lê e normaliza o formato Excel JSJ para um DataFrame pandas
+Lê ficheiros Excel JSJ formato MQT e extrai artigos
 """
-import pandas as pd
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
+from openpyxl import load_workbook
 
 
-def parse_mqt_excel(excel_path: str) -> pd.DataFrame:
+def parse_mqt(excel_path: str) -> List[Dict]:
     """
     Faz parse de um ficheiro Excel MQT JSJ
+    
+    Especificações:
+    - Sheet: '02.MQT'
+    - Header: linha 14
+    - Dados: linhas 15 a 153
+    - Artigos reais: col D é string formato 'X.Y.Z' (não float)
     
     Args:
         excel_path: Caminho completo para o ficheiro Excel
         
     Returns:
-        DataFrame com as colunas:
-        - artigo_cod: código do artigo (ex: "5.5.4", "6.2.4.1")
-        - descricao: descrição textual do artigo
-        - unidade: unidade de medida
-        - quant_a: quantidade fundações
-        - quant_b: quantidade térreo
-        - quant_c: quantidade elevados
-        - quant_total: soma a+b+c
+        Lista de dicts, um por artigo, com campos:
+        {
+            artigo_cod, capitulo, subcapitulo, sufixo,
+            descricao, unidade, classe_material,
+            quant_a, quant_b, quant_c, quant_total,
+            preco_unit, total_eur
+        }
     """
-    # TODO: Implementar lógica de parsing
-    # O Excel MQT tem um formato específico:
-    # - Cabeçalho está numa linha específica
-    # - Artigos estão organizados por capítulo
-    # - Algumas linhas são separadores ou subtotais (ignorar)
-    
     print(f"📖 A ler ficheiro: {excel_path}")
     
-    # Placeholder de implementação
-    # df = pd.read_excel(excel_path, sheet_name=0)
-    # ... processamento ...
+    # Verificar se ficheiro existe
+    if not Path(excel_path).exists():
+        raise FileNotFoundError(f"Ficheiro não encontrado: {excel_path}")
     
-    # Exemplo de estrutura esperada do retorno:
-    data = {
-        'artigo_cod': [],
-        'descricao': [],
-        'unidade': [],
-        'quant_a': [],
-        'quant_b': [],
-        'quant_c': [],
-        'quant_total': []
-    }
+    # Carregar workbook com data_only=True (obter valores calculados)
+    wb = load_workbook(excel_path, data_only=True)
     
-    df = pd.DataFrame(data)
+    # Verificar se sheet existe
+    sheet_name = '02.MQT'
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"Sheet '{sheet_name}' não encontrada. Sheets disponíveis: {wb.sheetnames}")
     
-    print(f"   ✓ {len(df)} artigos parseados")
+    ws = wb[sheet_name]
     
-    return df
+    # Mapear colunas (1-based index)
+    COL_ARTIGO_COD = 4   # D
+    COL_DESCRICAO = 5    # E
+    COL_UNIDADE = 6      # F
+    COL_QUANT_A = 7      # G (Fundações)
+    COL_QUANT_B = 9      # I (Piso Térreo)
+    COL_QUANT_C = 11     # K (Pisos Elevados)
+    COL_QUANT_TOTAL = 14 # N
+    COL_PRECO_UNIT = 15  # O
+    COL_TOTAL_EUR = 16   # P
+    
+    artigos = []
+    linhas_processadas = 0
+    linhas_ignoradas = 0
+    
+    # Ler linhas de dados (15 a 153, 1-based)
+    for row_num in range(15, 154):
+        row = ws[row_num]
+        
+        # Obter valor da coluna D (artigo_cod)
+        artigo_cod_value = row[COL_ARTIGO_COD - 1].value
+        
+        # Ignorar se vazio
+        if artigo_cod_value is None:
+            linhas_ignoradas += 1
+            continue
+        
+        # Ignorar se é float (cabeçalhos de capítulo como 5.0, 15.0)
+        if isinstance(artigo_cod_value, (int, float)):
+            linhas_ignoradas += 1
+            continue
+        
+        # Converter para string e fazer strip
+        artigo_cod = str(artigo_cod_value).strip()
+        
+        # Verificar se tem formato de artigo (contém pontos)
+        if '.' not in artigo_cod:
+            linhas_ignoradas += 1
+            continue
+        
+        # Parse do código de artigo
+        parsed_cod = extract_capitulo_info(artigo_cod)
+        if parsed_cod['capitulo'] is None:
+            linhas_ignoradas += 1
+            continue
+        
+        # Extrair outros campos
+        descricao = _get_cell_string(row[COL_DESCRICAO - 1])
+        unidade = _get_cell_string(row[COL_UNIDADE - 1])
+        
+        # Extrair classe de material da descrição (ex: C30/37)
+        classe_material = extract_classe_material(descricao)
+        
+        # Extrair quantidades (floats ou None)
+        quant_a = _get_cell_float(row[COL_QUANT_A - 1])
+        quant_b = _get_cell_float(row[COL_QUANT_B - 1])
+        quant_c = _get_cell_float(row[COL_QUANT_C - 1])
+        quant_total = _get_cell_float(row[COL_QUANT_TOTAL - 1])
+        preco_unit = _get_cell_float(row[COL_PRECO_UNIT - 1])
+        total_eur = _get_cell_float(row[COL_TOTAL_EUR - 1])
+        
+        # Criar dict do artigo
+        artigo = {
+            'artigo_cod': artigo_cod,
+            'capitulo': parsed_cod['capitulo'],
+            'subcapitulo': parsed_cod['subcapitulo'],
+            'sufixo': parsed_cod['sufixo'],
+            'descricao': descricao,
+            'unidade': unidade,
+            'classe_material': classe_material,
+            'quant_a': quant_a,
+            'quant_b': quant_b,
+            'quant_c': quant_c,
+            'quant_total': quant_total,
+            'preco_unit': preco_unit,
+            'total_eur': total_eur
+        }
+        
+        artigos.append(artigo)
+        linhas_processadas += 1
+    
+    wb.close()
+    
+    print(f"   ✓ {linhas_processadas} artigos parseados")
+    print(f"   ℹ {linhas_ignoradas} linhas ignoradas (cabeçalhos/vazias)")
+    
+    return artigos
 
 
-def extract_capitulo_info(artigo_cod: str) -> Dict[str, any]:
+def extract_capitulo_info(artigo_cod: str) -> Dict[str, Optional[str]]:
     """
     Extrai informação do código de artigo
     
+    Regras:
+    - capitulo   = 1º segmento         ex: '5.5.1'   → '5'
+    - subcapitulo = 1º+2º segmento     ex: '5.5.1'   → '5.5'
+    - sufixo     = restantes segmentos ex: '5.5.1'   → '1'
+                                        ex: '6.2.4.1' → '4.1'
+                                        ex: '15.3.1'  → '3.1'
+    
     Args:
-        artigo_cod: código do artigo (ex: "5.5.4", "6.2.4.1", "7.1.1.2")
+        artigo_cod: código do artigo (ex: "5.5.4", "6.2.4.1", "15.3.1")
         
     Returns:
-        Dict com:
-        - capitulo: 1º segmento (ex: 5, 6, 7)
-        - subcapitulo: 1º + 2º segmento (ex: "5.5", "6.2", "7.1")
-        - sufixo: restantes segmentos (ex: "4", "4.1", "1.2")
+        Dict com capitulo, subcapitulo, sufixo (strings ou None se inválido)
     """
     partes = artigo_cod.split('.')
     
+    # Mínimo 3 segmentos para ser artigo válido
     if len(partes) < 3:
         return {
             'capitulo': None,
@@ -76,43 +162,123 @@ def extract_capitulo_info(artigo_cod: str) -> Dict[str, any]:
             'sufixo': None
         }
     
-    capitulo = int(partes[0])
-    subcapitulo = f"{partes[0]}.{partes[1]}"
-    sufixo = '.'.join(partes[2:])
-    
-    return {
-        'capitulo': capitulo,
-        'subcapitulo': subcapitulo,
-        'sufixo': sufixo
-    }
+    try:
+        capitulo = partes[0]  # '5' ou '15'
+        subcapitulo = f"{partes[0]}.{partes[1]}"  # '5.5' ou '15.3'
+        sufixo = '.'.join(partes[2:])  # '1' ou '4.1' ou '3.1'
+        
+        return {
+            'capitulo': capitulo,
+            'subcapitulo': subcapitulo,
+            'sufixo': sufixo
+        }
+    except Exception:
+        return {
+            'capitulo': None,
+            'subcapitulo': None,
+            'sufixo': None
+        }
 
 
-def validate_artigo_structure(df: pd.DataFrame) -> bool:
+def extract_classe_material(descricao: str) -> Optional[str]:
     """
-    Valida se o DataFrame tem a estrutura esperada
+    Extrai classe de material da descrição (ex: C30/37, C20/25)
     
     Args:
-        df: DataFrame com artigos parseados
+        descricao: texto da descrição do artigo
         
     Returns:
-        True se válido, False caso contrário
+        String com classe (ex: 'C30/37') ou None se não encontrado
     """
-    required_columns = [
-        'artigo_cod', 'descricao', 'unidade',
-        'quant_a', 'quant_b', 'quant_c', 'quant_total'
-    ]
+    if not descricao:
+        return None
     
-    for col in required_columns:
-        if col not in df.columns:
-            print(f"❌ Coluna obrigatória em falta: {col}")
-            return False
+    # Regex para capturar padrão CXX/XX
+    pattern = r'C\d+/\d+'
+    match = re.search(pattern, descricao)
     
-    # Validar que quant_total = quant_a + quant_b + quant_c
-    df['quant_check'] = df['quant_a'] + df['quant_b'] + df['quant_c']
-    discrepancies = df[abs(df['quant_total'] - df['quant_check']) > 0.01]
+    if match:
+        return match.group(0)
     
-    if len(discrepancies) > 0:
-        print(f"⚠️  {len(discrepancies)} artigos com discrepâncias nas quantidades")
+    return None
+
+
+def _get_cell_string(cell) -> str:
+    """
+    Obtém valor de célula como string (stripped)
+    
+    Args:
+        cell: objeto Cell do openpyxl
+        
+    Returns:
+        String (vazia se None)
+    """
+    value = cell.value
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _get_cell_float(cell) -> Optional[float]:
+    """
+    Obtém valor de célula como float
+    
+    Args:
+        cell: objeto Cell do openpyxl
+        
+    Returns:
+        Float ou None se vazio/inválido
+    """
+    value = cell.value
+    if value is None or value == "":
+        return None
+    
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def validate_artigos(artigos: List[Dict]) -> bool:
+    """
+    Valida lista de artigos parseados
+    
+    Args:
+        artigos: lista de dicts com artigos
+        
+    Returns:
+        True se válido, False com warnings caso contrário
+    """
+    if not artigos:
+        print("⚠️  Nenhum artigo encontrado")
         return False
     
+    issues = 0
+    
+    for i, artigo in enumerate(artigos):
+        # Validar campos obrigatórios
+        if not artigo.get('artigo_cod'):
+            print(f"⚠️  Linha {i+1}: artigo_cod vazio")
+            issues += 1
+        
+        if not artigo.get('descricao'):
+            print(f"⚠️  Linha {i+1}: descricao vazia para {artigo.get('artigo_cod')}")
+            issues += 1
+        
+        # Validar quant_total = quant_a + quant_b + quant_c (se todos definidos)
+        qa = artigo.get('quant_a') or 0
+        qb = artigo.get('quant_b') or 0
+        qc = artigo.get('quant_c') or 0
+        qt = artigo.get('quant_total') or 0
+        
+        soma = qa + qb + qc
+        if abs(qt - soma) > 0.01 and qt != 0:
+            print(f"⚠️  {artigo['artigo_cod']}: quant_total ({qt}) ≠ soma ({soma})")
+            issues += 1
+    
+    if issues > 0:
+        print(f"⚠️  {issues} problemas encontrados na validação")
+        return False
+    
+    print(f"✅ Validação OK: {len(artigos)} artigos válidos")
     return True
