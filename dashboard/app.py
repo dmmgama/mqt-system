@@ -29,7 +29,7 @@ def main():
     client = init_supabase()
     
     # Tabs principais
-    tab1, tab2, tab3 = st.tabs(["🔄 Ingestão", "📈 Índices", "📋 Artigos"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🔄 Ingestão", "📈 Índices", "📋 Artigos", "⚙️ Gestão"])
     
     # ============================================================
     # TAB 1 — INGESTÃO
@@ -232,6 +232,81 @@ def main():
                     
                     st.dataframe(df_filtered, use_container_width=True, hide_index=True)
                     st.caption(f"📊 {len(df_filtered)} artigos")
+    
+    # ============================================================
+    # TAB 4 — GESTÃO
+    # ============================================================
+    with tab4:
+        st.header("Gestão de Projectos e Snapshots")
+        
+        # 1. Tabela de projectos existentes
+        st.subheader("📁 Projectos")
+        projects_resp = client.table("projects").select("id, nome, tipologia, fase_actual, created_at").execute()
+        
+        if not projects_resp.data:
+            st.info("ℹ️ Nenhum projecto encontrado.")
+        else:
+            df_projects = pd.DataFrame(projects_resp.data)
+            df_projects["created_at"] = pd.to_datetime(df_projects["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
+            st.dataframe(df_projects, use_container_width=True, hide_index=True)
+            
+            st.divider()
+            
+            # 2. Gestão de snapshots por projecto
+            st.subheader("📸 Snapshots por Projecto")
+            
+            project_names = {p["nome"]: p["id"] for p in projects_resp.data}
+            selected_project_name = st.selectbox("Seleccionar Projecto", options=list(project_names.keys()), key="gestao_project")
+            selected_project_id = project_names[selected_project_name]
+            
+            # Listar snapshots do projecto
+            snapshots_resp = client.table("mqt_snapshots").select("id, fase, data_upload, ficheiro_ref, status").eq("project_id", selected_project_id).order("data_upload", desc=True).execute()
+            
+            if not snapshots_resp.data:
+                st.info(f"ℹ️ Nenhum snapshot encontrado para {selected_project_name}.")
+                
+                # 4. Botão apagar projecto (só se não houver snapshots)
+                st.divider()
+                st.warning(f"⚠️ Apagar projecto **{selected_project_name}**")
+                confirm_delete_project = st.checkbox(f"Confirmar apagar projecto {selected_project_name}", key="confirm_del_proj")
+                
+                if st.button("🗑️ Apagar Projecto", type="secondary", disabled=not confirm_delete_project):
+                    try:
+                        client.table("projects").delete().eq("id", selected_project_id).execute()
+                        st.success(f"✅ Projecto {selected_project_name} apagado com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Erro ao apagar projecto: {str(e)}")
+            else:
+                df_snapshots = pd.DataFrame(snapshots_resp.data)
+                st.dataframe(df_snapshots, use_container_width=True, hide_index=True)
+                
+                # 3. Apagar snapshot individual
+                st.divider()
+                st.subheader("🗑️ Apagar Snapshot")
+                
+                snapshot_options = {
+                    f"{s['fase']} — {s['data_upload']} ({s['status']})": s["id"]
+                    for s in snapshots_resp.data
+                }
+                
+                if snapshot_options:
+                    selected_snapshot_label = st.selectbox("Seleccionar Snapshot para apagar", options=list(snapshot_options.keys()), key="del_snapshot")
+                    selected_snapshot_id = snapshot_options[selected_snapshot_label]
+                    
+                    confirm_delete = st.checkbox(f"Confirmar apagar snapshot: {selected_snapshot_label}", key="confirm_del_snap")
+                    
+                    if st.button("🗑️ Apagar Snapshot", type="secondary", disabled=not confirm_delete):
+                        try:
+                            # Ordem obrigatória (FK constraints)
+                            client.table("mqt_indices").delete().eq("snapshot_id", selected_snapshot_id).execute()
+                            client.table("mqt_artigos").delete().eq("snapshot_id", selected_snapshot_id).execute()
+                            client.table("mqt_snapshots").delete().eq("id", selected_snapshot_id).execute()
+                            
+                            st.success(f"✅ Snapshot apagado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao apagar snapshot: {str(e)}")
 
 
 if __name__ == "__main__":
