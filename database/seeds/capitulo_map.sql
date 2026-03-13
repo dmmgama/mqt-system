@@ -1,0 +1,16 @@
+-- ============================================
+-- SEED: capitulo_map
+-- ============================================
+-- Mapeamento estático de capítulos MQT JSJ
+-- 
+-- TODO: Copiar o conteúdo do ficheiro capitulo_map.sql externo para aqui
+-- 
+-- Estrutura esperada (exemplo):
+-- INSERT INTO capitulo_map (capitulo, tipo, unidade, descricao) VALUES
+--   (3, 'mov_terras', 'm³', 'Movimentação de Terras'),
+--   (4, 'fund_indireta', 'ml/m³/kg', 'Fundações Indirectas'),
+--   (5, 'betao', 'm³', 'Betões'),
+--   (6, 'cofragem', 'm²', 'Cofragem'),
+--   (7, 'aco_ord', 'kg', 'Armaduras Ordinárias'),
+--   (8, 'aco_activo', 'kg', 'Armaduras Activas (Pré-esforço)'),
+--   -- etc...
