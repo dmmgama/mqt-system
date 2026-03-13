@@ -37,7 +37,7 @@ def main():
     with tab1:
         st.header("Ingestão de MQT")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             ficheiro = st.file_uploader(
@@ -56,6 +56,15 @@ def main():
                 "Fase",
                 options=["EP", "Anteprojeto", "CE", "Execucao"]
             )
+
+        with col4:
+            emissao = st.selectbox("Emissão", ["E01", "E02", "E03", "E04", "E05"])
+            area_construcao = st.number_input(
+                "Área (m²)", min_value=0.0, step=10.0,
+                help="Área estrutural total. Necessária para índice C/Area."
+            )
+            if area_construcao == 0:
+                st.caption("⚠️ Sem área — C/Area não calculado")
         
         if st.button("🚀 Processar MQT", type="primary"):
             if ficheiro is None or not project_name:
@@ -77,7 +86,11 @@ def main():
                             st.success(f"✅ Projecto criado: {project_name} (ID: {project_id})")
                         
                         # 2. Ingestão
-                        snapshot_id = ingest_mqt(ficheiro, project_id, fase, client)
+                        snapshot_id = ingest_mqt(
+                            ficheiro, project_id, fase, client,
+                            emissao=emissao,
+                            area_construcao=area_construcao if area_construcao > 0 else None
+                        )
                         
                         # 3. Calcular índices
                         indices = calcular_indices(snapshot_id, client)
@@ -210,11 +223,11 @@ def main():
                     df_artigos = pd.DataFrame(artigos_resp.data)
                     
                     with col1:
-                        capitulos = ["Todos"] + sorted(df_artigos["capitulo"].unique().tolist())
+                        capitulos = ["Todos"] + sorted([c for c in df_artigos["capitulo"].unique().tolist() if c is not None])
                         filtro_capitulo = st.selectbox("Capítulo", capitulos)
                     
                     with col2:
-                        elementos = ["Todos"] + sorted(df_artigos["elemento_tipo"].unique().tolist())
+                        elementos = ["Todos"] + sorted([e for e in df_artigos["elemento_tipo"].unique().tolist() if e is not None])
                         filtro_elemento = st.selectbox("Elemento", elementos)
                     
                     # Aplicar filtros

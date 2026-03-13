@@ -88,8 +88,13 @@ def ingest_mqt(excel_path: str, project_id: str,
         .execute()
     
     if existing.data:
-        print(f"⚠️  Snapshot já existe para esta fase/emissão.")
-        return existing.data[0]['id']
+        old_snapshot_id = existing.data[0]['id']
+        print(f"⚠️  Snapshot existente encontrado — a substituir ({old_snapshot_id})...")
+        # Apagar dados anteriores (ordem obrigatória por FK)
+        supabase_client.table('mqt_indices').delete().eq('snapshot_id', old_snapshot_id).execute()
+        supabase_client.table('mqt_artigos').delete().eq('snapshot_id', old_snapshot_id).execute()
+        supabase_client.table('mqt_snapshots').delete().eq('id', old_snapshot_id).execute()
+        print(f"✅ Snapshot anterior apagado — a criar novo...")
     
     # 6. Criar snapshot
     print("💾 A criar snapshot em mqt_snapshots...")

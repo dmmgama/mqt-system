@@ -14,9 +14,6 @@ ARTIGOS_ACO_ZERO = {'12', '14', '16'}  # elemento_sufixo a ignorar no cap 7
 ELEMENTOS_LAJE_CONJUNTO = {'LAJE_MACICA', 'BANDA', 'CAPITEL'}
 
 
-ELEMENTOS_LAJE_CONJUNTO = {'LAJE_MACICA', 'BANDA', 'CAPITEL'}
-
-
 def _filtrar_artigos_aco(artigos):
     """
     Filtra artigos de aço, removendo aqueles com regra 7.X.{12,14,16} que são sempre zero.
