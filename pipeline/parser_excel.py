@@ -12,12 +12,17 @@ from openpyxl import load_workbook
 def _detect_layout(ws) -> dict:
     """
     Detecta layout de colunas lendo linha 14.
+    Identifica pares QUANT.+PARCIAL consecutivos para detectar zonas.
+    NÃO lê labels de zona do Excel (labels vêm de projects.zona_config).
+    Fallback: se não encontra pares, assume 1 zona (QUANT. simples).
+    
     Retorna dict com índices 0-based:
     {
-        quant_cols: [6, 8, 10] ou [6, 8, 10, 12],  # índices 0-based das zonas
-        quant_total: 13,   # 0-based
+        quant_cols: [6, 8, 10],  # índices das colunas QUANT. que precedem PARCIAL
+        quant_total: 13,
         preco_unit: 14,
-        total_eur: 15
+        total_eur: 15,
+        num_zonas: 3
     }
     """
     header_row = ws[14]
@@ -25,27 +30,49 @@ def _detect_layout(ws) -> dict:
     quant_total_col = None
     preco_unit_col = None
     total_eur_col = None
-    
-    for i, cell in enumerate(header_row[:20]):
-        val = str(cell.value or '').strip().upper()
-        if val == 'QUANT.':
-            quant_cols.append(i)
-        elif 'QUANT. TOTAL' in val or 'QUANT.TOTAL' in val:
+    prev_was_quant = False
+    prev_quant_idx = None
+
+    for i, cell in enumerate(header_row[:24]):
+        val = str(cell.value or '').strip().upper().replace('\n', ' ')
+        if val in ('QUANT.', 'QUANT'):
+            prev_was_quant = True
+            prev_quant_idx = i
+        elif val == 'PARCIAL':
+            if prev_was_quant and prev_quant_idx is not None:
+                quant_cols.append(prev_quant_idx)
+            prev_was_quant = False
+            prev_quant_idx = None
+        elif 'QUANT. TOTAL' in val or 'QUANT.TOTAL' in val or 'QUANT TOTAL' in val:
             quant_total_col = i
+            prev_was_quant = False
         elif 'P. UNIT' in val or 'P.UNIT' in val:
             preco_unit_col = i
-        elif val == 'TOTAL €':
+            prev_was_quant = False
+        elif val in ('TOTAL €', 'TOTAL'):
             total_eur_col = i
-    
+            prev_was_quant = False
+        else:
+            prev_was_quant = False
+            prev_quant_idx = None
+
+    if not quant_cols:
+        for i, cell in enumerate(header_row[:24]):
+            val = str(cell.value or '').strip().upper()
+            if val in ('QUANT.', 'QUANT'):
+                quant_cols = [i]
+                break
+
     return {
         'quant_cols': quant_cols,
         'quant_total': quant_total_col,
         'preco_unit': preco_unit_col,
-        'total_eur': total_eur_col
+        'total_eur': total_eur_col,
+        'num_zonas': len(quant_cols) if quant_cols else 1,
     }
 
 
-def parse_mqt(excel_path) -> List[Dict]:
+def parse_mqt(excel_path) -> Dict:
     """
     Faz parse de um ficheiro Excel MQT JSJ
     
@@ -59,12 +86,10 @@ def parse_mqt(excel_path) -> List[Dict]:
         excel_path: Caminho para ficheiro Excel (str) ou file-like object (upload)
         
     Returns:
-        Lista de dicts, um por artigo, com campos:
+        Dict com:
         {
-            artigo_cod, capitulo, subcapitulo, sufixo,
-            descricao, unidade, classe_material,
-            quant_a, quant_b, quant_c, quant_total,
-            preco_unit, total_eur
+            'artigos': [...],  # lista de dicts com artigos
+            'num_zonas': 3,    # número de zonas detectadas no layout
         }
     """
     if hasattr(excel_path, 'read'):
@@ -88,6 +113,7 @@ def parse_mqt(excel_path) -> List[Dict]:
     col_quant_total = layout['quant_total']
     col_preco_unit = layout['preco_unit']
     col_total_eur = layout['total_eur']
+    num_zonas = layout['num_zonas']
     
     # Colunas fixas (0-based)
     COL_ARTIGO_COD = 3   # D (0-based)
@@ -137,23 +163,16 @@ def parse_mqt(excel_path) -> List[Dict]:
         classe_material = extract_classe_material(descricao)
         
         # Extrair quantidades (floats ou None) - detecção automática de zonas
-        zonas = [_get_cell_float(row[c]) for c in quant_cols]
+        zonas = [_get_cell_float(row[c]) for c in layout['quant_cols']]
         quant_a = zonas[0] if len(zonas) > 0 else None
         quant_b = zonas[1] if len(zonas) > 1 else None
         quant_c = zonas[2] if len(zonas) > 2 else None
-        
-        # Se 4 zonas, agregar b+c (índices 1 e 2) em quant_b, zona 3 em quant_c
-        if len(zonas) == 4:
-            b2 = zonas[1] or 0
-            b3 = zonas[2] or 0
-            quant_b = round(b2 + b3, 4) if (b2 or b3) else None
-            quant_c = zonas[3]
-        
-        quant_total = _get_cell_float(row[col_quant_total]) if col_quant_total is not None else None
-        # Fallback: somar zonas se quant_total None
-        if quant_total is None and zonas:
-            soma = sum(z or 0 for z in zonas)
-            quant_total = round(soma, 4) if soma else None
+        quant_d = zonas[3] if len(zonas) > 3 else None
+
+        col_qt = layout['quant_total']
+        quant_total = _get_cell_float(row[col_qt]) if col_qt is not None else None
+        if quant_total is None:
+            quant_total = round(sum(z or 0 for z in zonas), 4) or None
         
         preco_unit = _get_cell_float(row[col_preco_unit]) if col_preco_unit is not None else None
         total_eur = _get_cell_float(row[col_total_eur]) if col_total_eur is not None else None
@@ -164,12 +183,14 @@ def parse_mqt(excel_path) -> List[Dict]:
             'capitulo': parsed_cod['capitulo'],
             'subcapitulo': parsed_cod['subcapitulo'],
             'sufixo': parsed_cod['sufixo'],
+            'elemento_sufixo': parsed_cod['elemento_sufixo'],
             'descricao': descricao,
             'unidade': unidade,
             'classe_material': classe_material,
             'quant_a': quant_a,
             'quant_b': quant_b,
             'quant_c': quant_c,
+            'quant_d': quant_d,
             'quant_total': quant_total,
             'preco_unit': preco_unit,
             'total_eur': total_eur
@@ -182,8 +203,12 @@ def parse_mqt(excel_path) -> List[Dict]:
     
     print(f"   ✓ {linhas_processadas} artigos parseados")
     print(f"   ℹ {linhas_ignoradas} linhas ignoradas (cabeçalhos/vazias)")
+    print(f"   ℹ {num_zonas} zona(s) detectada(s) no layout")
     
-    return artigos
+    return {
+        'artigos': artigos,
+        'num_zonas': num_zonas
+    }
 
 
 def extract_capitulo_info(artigo_cod: str) -> Dict[str, Optional[str]]:
@@ -196,12 +221,15 @@ def extract_capitulo_info(artigo_cod: str) -> Dict[str, Optional[str]]:
     - sufixo     = restantes segmentos ex: '5.5.1'   → '1'
                                         ex: '6.2.4.1' → '4.1'
                                         ex: '15.3.1'  → '3.1'
+    - elemento_sufixo = 3º segmento    ex: '5.5.1'   → '1'
+                                        ex: '6.2.4.1' → '4'
+                                        ex: '15.3.1'  → '1'
     
     Args:
         artigo_cod: código do artigo (ex: "5.5.4", "6.2.4.1", "15.3.1")
         
     Returns:
-        Dict com capitulo, subcapitulo, sufixo (strings ou None se inválido)
+        Dict com capitulo, subcapitulo, sufixo, elemento_sufixo (strings ou None se inválido)
     """
     partes = artigo_cod.split('.')
     
@@ -210,24 +238,28 @@ def extract_capitulo_info(artigo_cod: str) -> Dict[str, Optional[str]]:
         return {
             'capitulo': None,
             'subcapitulo': None,
-            'sufixo': None
+            'sufixo': None,
+            'elemento_sufixo': None
         }
     
     try:
         capitulo = partes[0]  # '5' ou '15'
         subcapitulo = f"{partes[0]}.{partes[1]}"  # '5.5' ou '15.3'
         sufixo = '.'.join(partes[2:])  # '1' ou '4.1' ou '3.1'
+        elemento_sufixo = partes[2]  # 3º segmento apenas: '1' ou '4'
         
         return {
             'capitulo': capitulo,
             'subcapitulo': subcapitulo,
-            'sufixo': sufixo
+            'sufixo': sufixo,
+            'elemento_sufixo': elemento_sufixo
         }
     except Exception:
         return {
             'capitulo': None,
             'subcapitulo': None,
-            'sufixo': None
+            'sufixo': None,
+            'elemento_sufixo': None
         }
 
 

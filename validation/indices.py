@@ -1,11 +1,62 @@
 """
 Cálculo de índices estruturais e flags de validação
-Índices principais: A/V (kg/m³), A/C (kg/m²), V/C (m³/m²)
+Índices principais: A/V (kg/m³), A/C (kg/m²), V/C (m³/m²), C/Area (m²/m²)
 """
 from typing import Dict, List, Optional
 from datetime import datetime
 from collections import defaultdict
 from supabase import Client
+
+# Artigos de aço com regra 7.X.{12,14,16} - sempre zero, ignorar no cálculo
+ARTIGOS_ACO_ZERO = {'12', '14', '16'}  # elemento_sufixo a ignorar no cap 7
+
+# Elementos de laje para cálculo conjunto de A/V
+ELEMENTOS_LAJE_CONJUNTO = {'LAJE_MACICA', 'BANDA', 'CAPITEL'}
+
+
+ELEMENTOS_LAJE_CONJUNTO = {'LAJE_MACICA', 'BANDA', 'CAPITEL'}
+
+
+def _filtrar_artigos_aco(artigos):
+    """
+    Filtra artigos de aço, removendo aqueles com regra 7.X.{12,14,16} que são sempre zero.
+    
+    Args:
+        artigos: lista de artigos
+        
+    Returns:
+        lista filtrada excluindo artigos de aço inválidos
+    """
+    return [
+        a for a in artigos
+        if not (a.get('capitulo') == '7' and a.get('elemento_sufixo') in ARTIGOS_ACO_ZERO)
+    ]
+
+
+def _calc_av_lajes_conjunto(artigos_betao, artigos_aco):
+    """
+    Calcula A/V para Lajes+Bandas+Capitéis com denominador conjunto.
+    
+    Args:
+        artigos_betao: artigos do capítulo 5 (betão)
+        artigos_aco: artigos do capítulo 7 (aço)
+        
+    Returns:
+        A/V em kg/m³ ou None se denominador zero
+    """
+    # Agrupar aço de lajes (cap 7, sufixo 11)
+    kg = sum(
+        a.get('quant_total', 0) or 0
+        for a in artigos_aco
+        if a.get('capitulo') == '7' and a.get('elemento_sufixo') == '11'
+    )
+    # Agrupar betão de lajes (elementos no conjunto)
+    m3 = sum(
+        a.get('quant_total', 0) or 0
+        for a in artigos_betao
+        if a.get('elemento_tipo') in ELEMENTOS_LAJE_CONJUNTO
+    )
+    return round(kg / m3, 1) if m3 > 0 else None
 
 
 def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
@@ -25,7 +76,19 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     print(f"{'='*70}\n")
     print(f"📊 Snapshot ID: {snapshot_id}\n")
     
-    # 1. Ler todos os artigos do snapshot
+    # 1. Ler snapshot para obter area_construcao
+    print("📖 A ler snapshot...")
+    snapshot_result = supabase_client.table('mqt_snapshots') \
+        .select('area_construcao') \
+        .eq('id', snapshot_id) \
+        .single() \
+        .execute()
+    
+    snapshot = snapshot_result.data if snapshot_result.data else {}
+    area_construcao = snapshot.get('area_construcao')
+    print(f"✅ Área de construção: {area_construcao} m²" if area_construcao else "⚠️  Área não definida\n")
+    
+    # 2. Ler todos os artigos do snapshot
     print("📖 A ler artigos do snapshot...")
     result = supabase_client.table('mqt_artigos') \
         .select('*') \
@@ -39,7 +102,13 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     artigos = result.data
     print(f"✅ {len(artigos)} artigos carregados\n")
     
-    # 2. Agrupar por elemento_tipo e agregar quantidades
+    # 3. Filtrar artigos de aço inválidos (7.X.{12,14,16})
+    artigos_filtrados = _filtrar_artigos_aco(artigos)
+    if len(artigos_filtrados) < len(artigos):
+        print(f"ℹ  {len(artigos) - len(artigos_filtrados)} artigos de aço filtrados (regra 7.X.{{12,14,16}})\n")
+    artigos = artigos_filtrados
+    
+    # 4. Agrupar por elemento_tipo e agregar quantidades
     print("📐 A agregar quantidades por elemento_tipo e capítulo...")
     
     # Estrutura: { elemento_tipo: { 'betao': valor, 'cofragem': valor, 'aco': valor } }
@@ -123,6 +192,33 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
               f"A/V={av or 0:6.1f} kg/m³ | "
               f"cofr={cofragem:8.1f} m² | "
               f"V/C={vc or 0:5.2f}")
+    
+    # Cálculo especial: A/V para Lajes+Bandas+Capitéis com denominador conjunto
+    print(f"\n📊 A calcular A/V conjunto para Lajes+Bandas+Capitéis...")
+    artigos_betao = [a for a in artigos if a.get('capitulo') == '5']
+    artigos_aco = [a for a in artigos if a.get('capitulo') == '7']
+    av_lajes_conjunto = _calc_av_lajes_conjunto(artigos_betao, artigos_aco)
+    
+    if av_lajes_conjunto is not None:
+        print(f"✅ A/V Lajes+Bandas+Capitéis = {av_lajes_conjunto} kg/m³\n")
+        # Atualizar índices para elementos do conjunto
+        for resultado in resultados:
+            if resultado['elemento_tipo'] in ELEMENTOS_LAJE_CONJUNTO:
+                resultado['av'] = av_lajes_conjunto
+        for indice_db in indices_db:
+            if indice_db['elemento_tipo'] in ELEMENTOS_LAJE_CONJUNTO:
+                indice_db['av'] = av_lajes_conjunto
+    
+    # Cálculo de índices globais
+    print("📊 A calcular índices globais...")
+    total_cofragem = sum(qtys['cofragem_m2'] for qtys in agregados.values())
+    
+    if area_construcao and area_construcao > 0:
+        c_area = round(total_cofragem / area_construcao, 3)
+        print(f"✅ C/Area = {c_area} m²/m² (cofragem total={total_cofragem:.1f} m², área={area_construcao:.1f} m²)\n")
+    else:
+        c_area = None
+        print(f"⚠️  C/Area não calculado (área de construção não disponível)\n")
     
     # 4. Inserir resultados em mqt_indices
     print(f"\n💾 A inserir {len(indices_db)} índices em mqt_indices...")
