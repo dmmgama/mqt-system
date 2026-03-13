@@ -1,76 +1,144 @@
 """
 Cálculo de índices estruturais e flags de validação
-Índices principais: kg/m³ (betão+aço), m²/m³ (cofragem)
+Índices principais: A/V (kg/m³), A/C (kg/m²), V/C (m³/m²)
 """
 from typing import Dict, List, Optional
+from datetime import datetime
+from collections import defaultdict
 from supabase import Client
 
 
-def calcular_indices_snapshot(snapshot_id: str, client: Client) -> Dict:
+def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     """
-    Calcula índices estruturais para um snapshot MQT completo
+    Calcula índices estruturais por elemento_tipo para um snapshot MQT
     
     Args:
-        snapshot_id: ID do snapshot na tabela mqt_snapshots
-        client: cliente Supabase
+        snapshot_id: UUID do snapshot na tabela mqt_snapshots
+        supabase_client: cliente Supabase autenticado
         
     Returns:
-        Dict com índices calculados:
-        - vol_betao_total: volume total de betão (m³)
-        - peso_aco_total: peso total de aço (kg)
-        - area_cofragem_total: área total de cofragem (m²)
-        - indice_aco_betao: kg aço / m³ betão
-        - indice_cofragem_betao: m² cofragem / m³ betão
-        - flags: lista de flags de alerta
+        Lista de dicts com índices por elemento_tipo:
+        - elemento_tipo, betao_m3, cofragem_m2, aco_kg, av, ac, vc, flag
     """
-    print(f"📐 A calcular índices para snapshot {snapshot_id}...")
+    print(f"\n{'='*70}")
+    print(f"CÁLCULO DE ÍNDICES ESTRUTURAIS")
+    print(f"{'='*70}\n")
+    print(f"📊 Snapshot ID: {snapshot_id}\n")
     
-    # 1. Obter todos os artigos deste snapshot
-    artigos = client.table("mqt_artigos").select("*").eq(
-        "snapshot_id", snapshot_id
-    ).execute()
+    # 1. Ler todos os artigos do snapshot
+    print("📖 A ler artigos do snapshot...")
+    result = supabase_client.table('mqt_artigos') \
+        .select('*') \
+        .eq('snapshot_id', snapshot_id) \
+        .execute()
     
-    if not artigos.data:
+    if not result.data:
         print("⚠️  Nenhum artigo encontrado para este snapshot")
-        return None
+        return []
     
-    # 2. Somar quantidades por tipo
-    vol_betao_total = 0.0
-    peso_aco_total = 0.0
-    area_cofragem_total = 0.0
+    artigos = result.data
+    print(f"✅ {len(artigos)} artigos carregados\n")
     
-    for artigo in artigos.data:
-        # TODO: Implementar lógica de soma baseada em capitulo_map
-        # Se capitulo = 5 → betao (m³)
-        # Se capitulo = 6 → cofragem (m²)
-        # Se capitulo = 7,8 → aço (kg)
-        pass
+    # 2. Agrupar por elemento_tipo e agregar quantidades
+    print("📐 A agregar quantidades por elemento_tipo e capítulo...")
     
-    # 3. Calcular índices
-    indice_aco_betao = peso_aco_total / vol_betao_total if vol_betao_total > 0 else 0
-    indice_cofragem_betao = area_cofragem_total / vol_betao_total if vol_betao_total > 0 else 0
+    # Estrutura: { elemento_tipo: { 'betao': valor, 'cofragem': valor, 'aco': valor } }
+    agregados = defaultdict(lambda: {'betao_m3': 0.0, 'cofragem_m2': 0.0, 'aco_kg': 0.0})
     
-    # 4. Gerar flags de alerta
-    flags = gerar_flags_validacao(indice_aco_betao, indice_cofragem_betao)
+    for artigo in artigos:
+        elemento_tipo = artigo.get('elemento_tipo', 'OUTRO')
+        capitulo = artigo.get('capitulo', '')
+        
+        # Calcular quant_total se não existir (soma de A+B+C)
+        quant_total = artigo.get('quant_total')
+        if quant_total is None:
+            quant_a = artigo.get('quant_a', 0.0) or 0.0
+            quant_b = artigo.get('quant_b', 0.0) or 0.0
+            quant_c = artigo.get('quant_c', 0.0) or 0.0
+            quant_total = quant_a + quant_b + quant_c
+        else:
+            quant_total = quant_total or 0.0
+        
+        # Agregar por tipo de capítulo
+        if capitulo == '5':  # Betão
+            agregados[elemento_tipo]['betao_m3'] += quant_total
+        elif capitulo == '6':  # Cofragem
+            agregados[elemento_tipo]['cofragem_m2'] += quant_total
+        elif capitulo in ['7', '8']:  # Aço ordinário (7) + pré-esforço (8)
+            agregados[elemento_tipo]['aco_kg'] += quant_total
     
-    # 5. Inserir na tabela mqt_indices
-    indices_data = {
-        "snapshot_id": snapshot_id,
-        "vol_betao_total": vol_betao_total,
-        "peso_aco_total": peso_aco_total,
-        "area_cofragem_total": area_cofragem_total,
-        "indice_aco_betao": indice_aco_betao,
-        "indice_cofragem_betao": indice_cofragem_betao,
-        "flags": flags
-    }
+    print(f"✅ {len(agregados)} elementos processados\n")
+    
+    # 3. Calcular índices para cada elemento_tipo
+    print("🔢 A calcular índices...\n")
+    
+    resultados = []
+    indices_db = []
+    
+    for elemento_tipo, qtys in sorted(agregados.items()):
+        betao = qtys['betao_m3']
+        cofragem = qtys['cofragem_m2']
+        aco = qtys['aco_kg']
+        
+        # Calcular índices (só se denominador > 0, senão None)
+        av = (aco / betao) if betao > 0 else None  # kg/m³ (aço/volume)
+        ac = (aco / cofragem) if cofragem > 0 else None  # kg/m² (aço/cofragem)
+        vc = (betao / cofragem) if cofragem > 0 else None  # m³/m² (volume/cofragem)
+        
+        # Atribuir flag (por defeito 'ok' - flags manuais por agora)
+        flag = 'ok'
+        
+        # Resultado para retorno
+        resultado = {
+            'elemento_tipo': elemento_tipo,
+            'betao_m3': betao,
+            'cofragem_m2': cofragem,
+            'aco_kg': aco,
+            'av': av,
+            'ac': ac,
+            'vc': vc,
+            'flag': flag
+        }
+        resultados.append(resultado)
+        
+        # Preparar para inserção na DB
+        indice_db = {
+            'snapshot_id': snapshot_id,
+            'elemento_tipo': elemento_tipo,
+            'betao_m3': betao,
+            'aco_kg': aco,
+            'cofragem_m2': cofragem,
+            'av': av,
+            'ac': ac,
+            'vc': vc,
+            'flag': flag,
+            'calculado_em': datetime.utcnow().isoformat()
+        }
+        indices_db.append(indice_db)
+        
+        # Print linha da tabela
+        print(f"{elemento_tipo:20s} | "
+              f"betão={betao:8.1f} m³ | "
+              f"aço={aco:9.1f} kg | "
+              f"A/V={av or 0:6.1f} kg/m³ | "
+              f"cofr={cofragem:8.1f} m² | "
+              f"V/C={vc or 0:5.2f}")
+    
+    # 4. Inserir resultados em mqt_indices
+    print(f"\n💾 A inserir {len(indices_db)} índices em mqt_indices...")
     
     try:
-        result = client.table("mqt_indices").insert(indices_data).execute()
-        print(f"✅ Índices calculados e guardados")
-        return indices_data
+        result = supabase_client.table('mqt_indices').insert(indices_db).execute()
+        print(f"✅ {len(result.data)} índices inseridos\n")
     except Exception as e:
-        print(f"❌ Erro ao guardar índices: {e}")
-        return None
+        print(f"❌ Erro ao inserir índices: {e}\n")
+        # Não falhar - retornar resultados mesmo se inserção falhar
+    
+    print(f"{'='*70}")
+    print(f"✅ CÁLCULO DE ÍNDICES COMPLETO")
+    print(f"{'='*70}\n")
+    
+    return resultados
 
 
 def gerar_flags_validacao(indice_aco_betao: float, 
