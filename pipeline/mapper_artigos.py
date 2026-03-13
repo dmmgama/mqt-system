@@ -20,7 +20,7 @@ def map_artigos(artigos: list[dict], supabase_client: Client) -> list[dict]:
     # Carregar elemento_map do Supabase UMA vez
     try:
         result = supabase_client.table("elemento_map") \
-            .select("capitulo, elemento_sufixo, elemento_tipo") \
+            .select("capitulo, sufixo, elemento_tipo") \
             .is_("projeto_id", "null") \
             .execute()
         
@@ -38,10 +38,10 @@ def map_artigos(artigos: list[dict], supabase_client: Client) -> list[dict]:
             artigo['elemento_tipo'] = 'OUTRO'
         return artigos
     
-    # Construir dict de lookup em memória: (capitulo, elemento_sufixo) → elemento_tipo
+    # Construir dict de lookup em memória: (capitulo, sufixo) → elemento_tipo
     lookup = {}
     for row in result.data:
-        key = (row['capitulo'], row['elemento_sufixo'])
+        key = (row['capitulo'], row['sufixo'])
         lookup[key] = row['elemento_tipo']
     
     print(f"✅ Carregados {len(lookup)} mapeamentos de elemento_map")
