@@ -9,6 +9,42 @@ from typing import Dict, List, Optional
 from openpyxl import load_workbook
 
 
+def _detect_layout(ws) -> dict:
+    """
+    Detecta layout de colunas lendo linha 14.
+    Retorna dict com índices 0-based:
+    {
+        quant_cols: [6, 8, 10] ou [6, 8, 10, 12],  # índices 0-based das zonas
+        quant_total: 13,   # 0-based
+        preco_unit: 14,
+        total_eur: 15
+    }
+    """
+    header_row = ws[14]
+    quant_cols = []
+    quant_total_col = None
+    preco_unit_col = None
+    total_eur_col = None
+    
+    for i, cell in enumerate(header_row[:20]):
+        val = str(cell.value or '').strip().upper()
+        if val == 'QUANT.':
+            quant_cols.append(i)
+        elif 'QUANT. TOTAL' in val or 'QUANT.TOTAL' in val:
+            quant_total_col = i
+        elif 'P. UNIT' in val or 'P.UNIT' in val:
+            preco_unit_col = i
+        elif val == 'TOTAL €':
+            total_eur_col = i
+    
+    return {
+        'quant_cols': quant_cols,
+        'quant_total': quant_total_col,
+        'preco_unit': preco_unit_col,
+        'total_eur': total_eur_col
+    }
+
+
 def parse_mqt(excel_path) -> List[Dict]:
     """
     Faz parse de um ficheiro Excel MQT JSJ
@@ -46,16 +82,17 @@ def parse_mqt(excel_path) -> List[Dict]:
     
     ws = wb[sheet_name]
     
-    # Mapear colunas (1-based index)
-    COL_ARTIGO_COD = 4   # D
-    COL_DESCRICAO = 5    # E
-    COL_UNIDADE = 6      # F
-    COL_QUANT_A = 7      # G (Fundações)
-    COL_QUANT_B = 9      # I (Piso Térreo)
-    COL_QUANT_C = 11     # K (Pisos Elevados)
-    COL_QUANT_TOTAL = 14 # N
-    COL_PRECO_UNIT = 15  # O
-    COL_TOTAL_EUR = 16   # P
+    # Detectar layout automaticamente
+    layout = _detect_layout(ws)
+    quant_cols = layout['quant_cols']
+    col_quant_total = layout['quant_total']
+    col_preco_unit = layout['preco_unit']
+    col_total_eur = layout['total_eur']
+    
+    # Colunas fixas (0-based)
+    COL_ARTIGO_COD = 3   # D (0-based)
+    COL_DESCRICAO = 4    # E
+    COL_UNIDADE = 5      # F
     
     artigos = []
     linhas_processadas = 0
@@ -66,7 +103,7 @@ def parse_mqt(excel_path) -> List[Dict]:
         row = ws[row_num]
         
         # Obter valor da coluna D (artigo_cod)
-        artigo_cod_value = row[COL_ARTIGO_COD - 1].value
+        artigo_cod_value = row[COL_ARTIGO_COD].value
         
         # Ignorar se vazio
         if artigo_cod_value is None:
@@ -78,8 +115,8 @@ def parse_mqt(excel_path) -> List[Dict]:
             linhas_ignoradas += 1
             continue
         
-        # Converter para string e fazer strip
-        artigo_cod = str(artigo_cod_value).strip()
+        # Converter para string e fazer strip (incluindo aspas)
+        artigo_cod = str(artigo_cod_value).strip().strip("'\"")
         
         # Verificar se tem formato de artigo (contém pontos)
         if '.' not in artigo_cod:
@@ -93,19 +130,33 @@ def parse_mqt(excel_path) -> List[Dict]:
             continue
         
         # Extrair outros campos
-        descricao = _get_cell_string(row[COL_DESCRICAO - 1])
-        unidade = _get_cell_string(row[COL_UNIDADE - 1])
+        descricao = _get_cell_string(row[COL_DESCRICAO])
+        unidade = _get_cell_string(row[COL_UNIDADE])
         
         # Extrair classe de material da descrição (ex: C30/37)
         classe_material = extract_classe_material(descricao)
         
-        # Extrair quantidades (floats ou None)
-        quant_a = _get_cell_float(row[COL_QUANT_A - 1])
-        quant_b = _get_cell_float(row[COL_QUANT_B - 1])
-        quant_c = _get_cell_float(row[COL_QUANT_C - 1])
-        quant_total = _get_cell_float(row[COL_QUANT_TOTAL - 1])
-        preco_unit = _get_cell_float(row[COL_PRECO_UNIT - 1])
-        total_eur = _get_cell_float(row[COL_TOTAL_EUR - 1])
+        # Extrair quantidades (floats ou None) - detecção automática de zonas
+        zonas = [_get_cell_float(row[c]) for c in quant_cols]
+        quant_a = zonas[0] if len(zonas) > 0 else None
+        quant_b = zonas[1] if len(zonas) > 1 else None
+        quant_c = zonas[2] if len(zonas) > 2 else None
+        
+        # Se 4 zonas, agregar b+c (índices 1 e 2) em quant_b, zona 3 em quant_c
+        if len(zonas) == 4:
+            b2 = zonas[1] or 0
+            b3 = zonas[2] or 0
+            quant_b = round(b2 + b3, 4) if (b2 or b3) else None
+            quant_c = zonas[3]
+        
+        quant_total = _get_cell_float(row[col_quant_total]) if col_quant_total is not None else None
+        # Fallback: somar zonas se quant_total None
+        if quant_total is None and zonas:
+            soma = sum(z or 0 for z in zonas)
+            quant_total = round(soma, 4) if soma else None
+        
+        preco_unit = _get_cell_float(row[col_preco_unit]) if col_preco_unit is not None else None
+        total_eur = _get_cell_float(row[col_total_eur]) if col_total_eur is not None else None
         
         # Criar dict do artigo
         artigo = {

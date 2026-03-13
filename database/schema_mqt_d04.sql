@@ -309,6 +309,34 @@ VALUES
 -- CAP 11 — Madeira lamelada
 ('11', '1',  'MADEIRA', 'Vigas madeira lamelada',           NULL),
 ('11', '2',  'MADEIRA', 'Pilares madeira lamelada',         NULL),
-('11', '99', 'MADEIRA', 'Madeira outros',                   NULL)
+('11', '99', 'MADEIRA', 'Madeira outros',                   NULL),
+-- CAP 5 — Betão (sufixos CUF)
+('5', '2',    'LAJE_FUNDO',    'Laje de fundo',              NULL),
+('5', '2.1',  'FUNDACAO',      'Em regularização fundações', NULL),
+('5', '3',    'VIGA_FUND',     'Vigas de fundação',          NULL),
+('5', '8',    'PAREDE_RES',    'Paredes de reservatório',    NULL),
+('5', '9',    'CONTENCAO',     'Paredes de contenção',       NULL),
+('5', '13',   'RAMPA',         'Lajes de rampas',            NULL),
+('5', '19.1', 'MASSAME',       'Massame betão',              NULL),
+('5', '19.2', 'MASSAME',       'Massame afagado',            NULL),
+('5', '20',   'MACIÇO',        'Maciços e plintos',          NULL),
+('5', '21',   'OUTRO',         'Caixas técnicas',            NULL),
+-- CAP 6 — Cofragem (sufixos CUF)
+('6', '2',    'LAJE_FUNDO',    'Cofragem laje de fundo',     NULL),
+('6', '3',    'VIGA_FUND',     'Cofragem vigas fundação',    NULL),
+('6', '8',    'PAREDE_RES',    'Cofragem paredes reserv.',   NULL),
+('6', '9',    'CONTENCAO',     'Cofragem contenção',         NULL),
+('6', '13',   'RAMPA',         'Cofragem rampas',            NULL),
+('6', '20',   'MACIÇO',        'Cofragem maciços',           NULL),
+('6', '21',   'OUTRO',         'Cofragem caixas técnicas',   NULL),
+-- CAP 7 — Aço (sufixos CUF)
+('7', '2',    'LAJE_FUNDO',    'Aço laje de fundo',          NULL),
+('7', '3',    'VIGA_FUND',     'Aço vigas fundação',         NULL),
+('7', '8',    'PAREDE_RES',    'Aço paredes reservatório',   NULL),
+('7', '9',    'CONTENCAO',     'Aço contenção',              NULL),
+('7', '13',   'RAMPA',         'Aço rampas',                 NULL),
+('7', '19',   'MASSAME',       'Aço massame',                NULL),
+('7', '20',   'MACIÇO',        'Aço maciços e plintos',      NULL),
+('7', '21',   'OUTRO',         'Aço caixas técnicas',        NULL)
 
 ON CONFLICT DO NOTHING;
