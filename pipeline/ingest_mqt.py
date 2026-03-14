@@ -121,9 +121,10 @@ def ingest_mqt(excel_path: str, project_id: str,
     # 7. Preparar dados para mqt_artigos (bulk insert)
     print("📝 A preparar artigos para inserção...")
     artigos_db = []
-    for artigo in artigos_mapped:
+    for idx, artigo in enumerate(artigos_mapped):
         artigo_db = {
             'snapshot_id': snapshot_id,
+            'ordem': idx,
             'nivel': artigo.get('nivel'),
             'capitulo': artigo.get('capitulo'),
             'subcapitulo': artigo.get('subcapitulo'),

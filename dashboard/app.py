@@ -243,7 +243,7 @@ def main():
                 # Carregar artigos — incluir campo nivel
                 artigos_resp = client.table("mqt_artigos").select(
                     "artigo_cod, descricao, unidade, elemento_tipo, capitulo, nivel, quant_a, quant_b, quant_c, quant_total"
-                ).eq("snapshot_id", snapshot_id_art).order("id").execute()
+                ).eq("snapshot_id", snapshot_id_art).order("ordem").execute()
 
                 if not artigos_resp.data:
                     st.warning("⚠️ Nenhum artigo encontrado.")
@@ -272,12 +272,17 @@ def main():
                         df_filtered = df_filtered[df_filtered["elemento_tipo"] == filtro_elemento]
 
                     def _fmt_num(v):
-                        if v is None or v == 0 or v == 0.0:
+                        if v is None:
                             return ""
                         try:
-                            return f"{float(v):,.2f}".replace(",", "\u00a0")
+                            f = float(v)
+                            if f != f:  # NaN check
+                                return ""
+                            if f == 0.0:
+                                return ""
+                            return f"{f:,.2f}".replace(",", "\u00a0")
                         except Exception:
-                            return str(v)
+                            return ""
 
                     def _row_style(nivel):
                         if nivel == 1:
