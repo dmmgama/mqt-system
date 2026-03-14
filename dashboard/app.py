@@ -111,7 +111,7 @@ def main():
             with c2:
                 tipo  = st.selectbox("Tipo", TIPOS_ZONA, index=TIPOS_ZONA.index(d_tipo), key=f"ztipo_{i}")
             with c3:
-                col   = st.selectbox("Col Excel", COLS_EXCEL, index=COLS_EXCEL.index(d_col), key=f"zcol_{i}")
+                col   = st.text_input("Col Excel", value=d_col, key=f"zcol_{i}")
             zona_config.append({'idx': i, 'col': col, 'label': label, 'tipo': tipo})
 
         if st.button("🚀 Processar MQT", type="primary"):
