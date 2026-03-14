@@ -1,327 +1,218 @@
 # MQT-SYSTEM — README PARA AGENTE IDE
-**Versão:** 3.0 · **Data:** 2026-03-13
+**Versão:** 3.1 · **Data:** 2026-03-14
 **Para:** GitHub Copilot / Cursor / agente VS Code
-**Contexto:** Branch 1 em curso (`fix-schema-mqt`) — fixes de UI + visual da tab Artigos
+**Stack:** Python + openpyxl + Streamlit + Supabase (instância MVP)
+**Repo:** `mqt-system` · **Ponto de entrada:** `streamlit run dashboard/app.py`
 
 ---
 
-## ESTADO ACTUAL (v3.0)
+## ESTADO ACTUAL — branch `fix-schema-mqt`
 
-### ✅ Concluído e funcional
-- Schema Supabase: Fix E/F/G/H corridos — todas as colunas existem
-- `pipeline/parser_excel.py` — hierarquia completa (caps + subcaps + artigos + specs)
-- `pipeline/mapper_artigos.py` — lookup por (capitulo, sufixo) correcto
-- `pipeline/ingest_mqt.py` — file-like, emissao, area_construcao, substituição de snapshots
-- `validation/indices.py` — A/V lajes conjunto, filtro 7.X.{12,14,16}, C/Area nullable
-- `dashboard/app.py` — 4 tabs funcionais, campos emissão e área na ingestão
-- `elemento_map` seed — 64 linhas, sufixos 1-21+99 correctos por KB-07
+### ✅ Tudo concluído e funcional
 
-### 🔴 Pendente nesta sessão (3 fixes + commit)
-- FIX UI-1: Tab Artigos — visual hierárquico (caps bold/cinza, subcaps bold)
-- FIX UI-2: Tab Artigos — filtro capítulo ordenado ascendente
-- FIX UI-3: mapper — OUTRO só para caps 5/6/7 com sufixo desconhecido
-- FIX UI-4: Tab Artigos e Índices — nomes de elemento legíveis (sem underscore)
+| Componente | Estado |
+|---|---|
+| Schema Supabase | ✅ Todas as migrations corridas |
+| `pipeline/parser_excel.py` | ✅ Hierarquia completa + detecção de zonas |
+| `pipeline/mapper_artigos.py` | ✅ Lookup correcto + OUTRO só caps 5/6/7 |
+| `pipeline/ingest_mqt.py` | ✅ Substituição de snapshots + emissao + area + ordem |
+| `validation/indices.py` | ✅ Regra 7.X.11 + C/Area nullable |
+| `dashboard/app.py` | ✅ 4 tabs + visual hierárquico + nomes legíveis |
+| `elemento_map` seed | ✅ 64 linhas, sufixos correctos por KB-07 |
 
-### 🟡 Branch 2 (após commit desta branch)
-- `apps/projetos_app.py` — ficha de projecto 4 níveis
-- `apps/main_app.py` — st.navigation()
-- Renomear `dashboard/app.py` → `apps/mqt_app.py`
+### 🟡 Próxima branch: `projetos-app`
+A fazer após commit e merge da branch actual em `main`.
 
 ---
 
-## FIXES DESTA SESSÃO
+## PRÓXIMA TAREFA — branch `projetos-app`
 
-### FIX UI-1 — dashboard/app.py: visual hierárquico na tab Artigos
+### Pré-requisito: commit da branch actual
 
-A tab Artigos mostra todos os níveis numa tabela plana. Substituir o `st.dataframe`
-por uma tabela HTML renderizada com `st.markdown(..., unsafe_allow_html=True)`.
-
-**Lógica de estilo por nível:**
-- `nivel == 1` (capítulo): fundo `#e8e8e8`, texto bold, font-size 13px
-- `nivel == 2` (subcapítulo): fundo transparente, texto bold, font-size 13px
-- `nivel >= 3` (artigo): fundo transparente, texto normal, font-size 12px
-
-**Colunas a mostrar:** Código | Descrição | Unidade | Elemento | Quant A | Quant B | Quant C | Total
-
-Substituir o bloco da tab Artigos desde `# Carregar artigos` até ao `st.dataframe` por:
-
-```python
-# Carregar artigos — incluir campo nivel
-artigos_resp = client.table("mqt_artigos").select(
-    "artigo_cod, descricao, unidade, elemento_tipo, capitulo, nivel, quant_a, quant_b, quant_c, quant_total"
-).eq("snapshot_id", snapshot_id_art).order("id").execute()
-
-if not artigos_resp.data:
-    st.warning("⚠️ Nenhum artigo encontrado.")
-else:
-    df_artigos = pd.DataFrame(artigos_resp.data)
-
-    with col1:
-        # Filtro capítulo — ordenado numericamente ascendente
-        caps_raw = [c for c in df_artigos["capitulo"].unique().tolist() if c is not None]
-        try:
-            caps_sorted = sorted(caps_raw, key=lambda x: int(x))
-        except Exception:
-            caps_sorted = sorted(caps_raw)
-        capitulos = ["Todos"] + caps_sorted
-        filtro_capitulo = st.selectbox("Capítulo", capitulos)
-
-    with col2:
-        elementos = ["Todos"] + sorted([e for e in df_artigos["elemento_tipo"].unique().tolist() if e is not None])
-        filtro_elemento = st.selectbox("Elemento", elementos)
-
-    df_filtered = df_artigos.copy()
-    if filtro_capitulo != "Todos":
-        df_filtered = df_filtered[df_filtered["capitulo"] == filtro_capitulo]
-    if filtro_elemento != "Todos":
-        df_filtered = df_filtered[df_filtered["elemento_tipo"] == filtro_elemento]
-
-    # Mapa de nomes de elemento legíveis
-    ELEMENTO_LABELS = {
-        "FUNDACAO": "Fundações",
-        "LAJE_FUNDO": "Laje de fundo",
-        "VIGA_FUND": "Vigas de fundação",
-        "PILAR": "Pilares",
-        "NUCLEO": "Núcleos",
-        "PAREDE": "Paredes",
-        "PAREDE_PISC": "Paredes de piscinas",
-        "PAREDE_RES": "Paredes de reservatórios",
-        "CONTENCAO": "Paredes de contenção",
-        "VIGA": "Vigas",
-        "LAJE_MACICA": "Lajes maciças e dobras",
-        "LAJE_ALIG": "Lajes aligeiradas",
-        "RAMPA": "Lajes de rampas",
-        "BANDA": "Bandas",
-        "CAPITEL": "Capitéis",
-        "MURETE": "Muretes e platibandas",
-        "ESCADA": "Escadas betonadas in situ",
-        "MASSAME": "Massame",
-        "MACIÇO": "Maciços e plintos",
-        "OUTRO": "Outros",
-    }
-
-    def _fmt_num(v):
-        if v is None or (isinstance(v, float) and v == 0.0):
-            return ""
-        try:
-            return f"{float(v):,.2f}".replace(",", " ")
-        except Exception:
-            return str(v)
-
-    def _row_style(nivel):
-        if nivel == 1:
-            return 'background:#e8e8e8;font-weight:bold;font-size:13px;'
-        elif nivel == 2:
-            return 'font-weight:bold;font-size:13px;'
-        else:
-            return 'font-size:12px;'
-
-    # Construir tabela HTML
-    html = """
-    <style>
-    .mqt-table { width:100%; border-collapse:collapse; font-family:sans-serif; }
-    .mqt-table th { background:#333; color:#fff; padding:6px 8px; text-align:left; font-size:12px; }
-    .mqt-table td { padding:4px 8px; border-bottom:1px solid #e0e0e0; vertical-align:top; }
-    .mqt-table tr:hover td { background:#f5f5f5; }
-    </style>
-    <table class="mqt-table">
-    <tr>
-      <th>Código</th><th>Descrição</th><th>Un</th><th>Elemento</th>
-      <th style="text-align:right">Quant A</th>
-      <th style="text-align:right">Quant B</th>
-      <th style="text-align:right">Quant C</th>
-      <th style="text-align:right">Total</th>
-    </tr>
-    """
-
-    for _, row in df_filtered.iterrows():
-        nivel = row.get("nivel") or 3
-        style = _row_style(nivel)
-        elem_raw = row.get("elemento_tipo") or ""
-        elem_label = ELEMENTO_LABELS.get(elem_raw, elem_raw.replace("_", " ").title()) if elem_raw else ""
-        html += f"""<tr style="{style}">
-          <td>{row.get('artigo_cod','')}</td>
-          <td>{row.get('descricao','') or ''}</td>
-          <td>{row.get('unidade','') or ''}</td>
-          <td>{elem_label}</td>
-          <td style="text-align:right">{_fmt_num(row.get('quant_a'))}</td>
-          <td style="text-align:right">{_fmt_num(row.get('quant_b'))}</td>
-          <td style="text-align:right">{_fmt_num(row.get('quant_c'))}</td>
-          <td style="text-align:right">{_fmt_num(row.get('quant_total'))}</td>
-        </tr>"""
-
-    html += "</table>"
-    st.markdown(html, unsafe_allow_html=True)
-    st.caption(f"📊 {len(df_filtered)} linhas")
-```
-
----
-
-### FIX UI-2 — mapper_artigos.py: OUTRO só para caps 5/6/7
-
-Nos capítulos que não são 5, 6 ou 7, os artigos não têm `elemento_tipo` —
-não devem ser mapeados como OUTRO, devem ficar `None`.
-
-No loop principal de `map_artigos()`, substituir o bloco de lookup:
-
-```python
-# ANTES:
-key = (capitulo, elemento_sufixo)
-elemento_tipo = lookup.get(key)
-if elemento_tipo:
-    artigo['elemento_tipo'] = elemento_tipo
-else:
-    artigo['elemento_tipo'] = 'OUTRO'
-    print(f"⚠️  Sem mapeamento: {artigo_cod} | cap={capitulo} elem_suf={elemento_sufixo}")
-
-# DEPOIS:
-CAPS_COM_MAPEAMENTO = {'5', '6', '7'}
-
-key = (capitulo, elemento_sufixo)
-elemento_tipo = lookup.get(key)
-
-if elemento_tipo:
-    artigo['elemento_tipo'] = elemento_tipo
-elif capitulo in CAPS_COM_MAPEAMENTO:
-    # Sufixo desconhecido dentro dos caps estruturais → OUTRO com aviso
-    artigo['elemento_tipo'] = 'OUTRO'
-    print(f"⚠️  Sem mapeamento: {artigo_cod} | cap={capitulo} elem_suf={elemento_sufixo}")
-else:
-    # Caps 1,2,3,4,8,9,10,11,12,13,15... → sem elemento_tipo (correcto)
-    artigo['elemento_tipo'] = None
-```
-
----
-
-### FIX UI-3 — dashboard/app.py: nomes de elemento legíveis na tab Índices
-
-Na tab Índices, a coluna "Elemento" mostra `LAJE_MACICA`, `PAREDE_RES`, etc.
-Aplicar o mesmo `ELEMENTO_LABELS` dict para apresentação.
-
-Após construir `df_display`, adicionar antes do `st.dataframe`:
-
-```python
-ELEMENTO_LABELS = {
-    "FUNDACAO": "Fundações", "LAJE_FUNDO": "Laje de fundo",
-    "VIGA_FUND": "Vigas de fundação", "PILAR": "Pilares",
-    "NUCLEO": "Núcleos", "PAREDE": "Paredes",
-    "PAREDE_PISC": "Paredes de piscinas", "PAREDE_RES": "Paredes de reservatórios",
-    "CONTENCAO": "Paredes de contenção", "VIGA": "Vigas",
-    "LAJE_MACICA": "Lajes maciças e dobras", "LAJE_ALIG": "Lajes aligeiradas",
-    "RAMPA": "Lajes de rampas", "BANDA": "Bandas", "CAPITEL": "Capitéis",
-    "MURETE": "Muretes e platibandas", "ESCADA": "Escadas betonadas in situ",
-    "MASSAME": "Massame", "MACIÇO": "Maciços e plintos", "OUTRO": "Outros",
-}
-df_display["Elemento"] = df_display["Elemento"].map(
-    lambda x: ELEMENTO_LABELS.get(x, x.replace("_"," ").title()) if x else x
-)
-```
-
-Mover o dict `ELEMENTO_LABELS` para o topo do ficheiro `dashboard/app.py`
-(fora das funções, após os imports) para ser reutilizado nas duas tabs.
-
----
-
-### APÓS OS 3 FIXES
-
-```
+```bash
 git add -A
-git commit -m "feat: visual hierárquico tab artigos + elemento labels + OUTRO só caps 5/6/7"
+git commit -m "feat: visual hierárquico tab artigos + elemento labels + OUTRO só caps 5/6/7 + ordem artigos"
+git checkout main
+git merge fix-schema-mqt
+git checkout -b projetos-app
 ```
 
-Verificar:
-- Tab Artigos: caps a cinza bold, subcaps bold, artigos normais
-- Tab Artigos: filtro capítulo ordenado 3, 5, 6, 7, 8, 10, 11, 12, 15
-- Tab Artigos: coluna Elemento mostra "Lajes maciças e dobras" em vez de "LAJE_MACICA"
-- Tab Índices: coluna Elemento com nomes legíveis
-- Re-ingerir Amorim: caps 8/10/11/15 ficam com elemento_tipo = None (não OUTRO)
+### Fix H — Supabase: já corrido ✅
+Colunas `fase`, `num_zonas`, `zona_config`, `piso_config`, `elem_verticais`, `deleted_at`
+já existem na tabela `projects`.
+
+### Nova app: `apps/projetos_app.py`
+
+Funcionalidades (por esta ordem):
+1. Listagem de projectos (tabela: nome, fase, nº zonas, data criação)
+2. Criar projecto — ficha 4 níveis
+3. Editar projecto — mesma ficha pré-preenchida
+4. Apagar projecto — soft-delete (`deleted_at = now()`)
+
+**Ficha — Nível 1 (obrigatório):**
+```python
+nome = st.text_input("Nome do projecto")
+fase = st.selectbox("Fase", ["EP", "PB", "PEX", "AT"])
+num_zonas = st.number_input("Número de zonas", min_value=1, max_value=5, value=1)
+```
+
+**Ficha — Nível 2 (por zona, obrigatório se num_zonas > 1):**
+```python
+TIPOS_ZONA = ["Fundações","Pisos Enterrados","Piso Térreo",
+              "Pisos Elevados","Cobertura","Outras"]
+zona_keys = ['a','b','c','d','e']
+zona_config = []
+for i in range(num_zonas):
+    col1, col2 = st.columns(2)
+    tipo = col1.selectbox(f"Zona {zona_keys[i].upper()} — tipo", TIPOS_ZONA, key=f"tipo_{i}")
+    label = col2.text_input(f"Label (opcional)", key=f"label_{i}")
+    zona_config.append({"key": zona_keys[i], "tipo": tipo, "label": label or tipo})
+```
+
+**Ficha — Nível 3 (por piso, opcional):**
+```python
+num_pisos = st.number_input("Número de pisos (opcional)", min_value=0, value=0)
+piso_config = []
+if num_pisos > 0:
+    for i in range(num_pisos):
+        with st.expander(f"Piso {i+1}"):
+            nome_piso = st.text_input("Nome", key=f"pnome_{i}")
+            area = st.number_input("Área (m²)", min_value=0.0, key=f"parea_{i}")
+            tip_laje = st.selectbox("Tipologia laje", ["Maciça","Aligeirada","Outra"], key=f"ptip_{i}")
+            bandas = st.toggle("Com bandas?", key=f"pband_{i}")
+            pe = st.toggle("Pré-esforço?", key=f"ppe_{i}")
+            sistema = st.selectbox("Sistema", ["Fungiforme","Vigada"], key=f"psist_{i}")
+            esp = st.number_input("Espessura média laje (m)", min_value=0.0, step=0.01, key=f"pesp_{i}")
+            piso_config.append({
+                "nome": nome_piso, "area": area, "tipologia_laje": tip_laje,
+                "bandas": bandas, "pre_esforco": pe, "sistema": sistema,
+                "esp_laje": esp if esp > 0 else None
+            })
+```
+
+**Ficha — Nível 4 (elementos verticais, opcional):**
+```python
+with st.expander("Elementos verticais (opcional)"):
+    nucleos = st.toggle("Núcleos sísmicos?")
+    pilares = st.selectbox("Pilares", ["Sísmicos","Secundários","Misto"])
+    elem_verticais = {"nucleos_sismicos": nucleos, "pilares": pilares}
+```
+
+### Aggregator: `apps/main_app.py`
+
+```python
+import streamlit as st
+
+pg = st.navigation([
+    st.Page("apps/projetos_app.py", title="Projectos", icon="🏗️"),
+    st.Page("apps/mqt_app.py",      title="MQT",       icon="📊"),
+])
+pg.run()
+```
+
+Renomear `dashboard/app.py` → `apps/mqt_app.py` (sem alterações de conteúdo).
+**Ponto de entrada após esta branch:** `streamlit run apps/main_app.py`
 
 ---
 
-## ESTADO DO SUPABASE (actual)
+## SUPABASE — ESTADO ACTUAL
 
-Todas as migrations já corridas. Não correr novamente.
+**Project ID:** `oajtzbvyjddyfggeusfe`
+**Instância:** MVP dedicada (D08)
 
 ### Tabelas e colunas relevantes
 
-**mqt_artigos:**
-- nivel (SMALLINT) — 1=cap, 2=subcap, 3=artigo, 4=nivel4
-- artigo_cod, descricao, unidade, especificacao
-- capitulo, subcapitulo, sufixo, elemento_sufixo
-- classe_material, elemento_tipo, is_nivel4
-- quant_a, quant_b, quant_c, quant_d, quant_total
+**`mqt_artigos`** — colunas actuais:
+- `id`, `snapshot_id`, `capitulo`, `subcapitulo`, `artigo_cod`, `sufixo`
+- `descricao`, `unidade`, `especificacao`, `classe_material`
+- `elemento_tipo`, `elemento_sufixo`, `is_nivel4`, `agrega_em`
+- `nivel` (1=cap, 2=subcap, 3=artigo, 4=nivel4)
+- `quant_a`, `quant_b`, `quant_c`, `quant_d`, `quant_total`
+- `ordem` (INT — posição original no Excel, usado para ORDER BY)
 
-**mqt_snapshots:**
-- emissao, area_construcao, num_zonas, zona_labels (JSONB)
+**`mqt_snapshots`** — colunas actuais:
+- `id`, `project_id`, `fase`, `data_upload`, `ficheiro_ref`
+- `emissao`, `area_construcao`, `num_zonas`, `zona_labels` (JSONB)
+- `status`, `created_at`
 
-**projects:**
-- fase, num_zonas, zona_config (JSONB), piso_config (JSONB)
-- elem_verticais (JSONB), deleted_at
+**`projects`** — colunas actuais:
+- `id`, `nome`, `tipologia`, `fase_actual`, `created_at`
+- `fase`, `num_zonas`, `zona_config` (JSONB), `piso_config` (JSONB)
+- `elem_verticais` (JSONB), `deleted_at`
 
-**elemento_map:**
-- PK: (capitulo, sufixo) — sem projeto_id na PK
-- 64 linhas globais (projeto_id IS NULL)
-- Sufixos 1-21 + 99 para caps 5, 6, 7 — correctos por KB-07
+**`elemento_map`** — PK: `(capitulo, sufixo)`, 64 linhas globais
+**`mqt_indices`** — `av`, `ac`, `vc`, `betao_m3`, `aco_kg`, `cofragem_m2`, `flag`
 
----
-
-## SEED elemento_map DEFINITIVO (KB-07)
+### Seed `elemento_map` (definitivo — KB-07)
 
 Sufixo → elemento_tipo (igual para caps 5, 6, 7):
 
-| sufixo | elemento_tipo      |
-|--------|--------------------|
-| 1      | FUNDACAO           |
-| 2      | LAJE_FUNDO         |
-| 3      | VIGA_FUND          |
-| 4      | PILAR              |
-| 5      | NUCLEO             |
-| 6      | PAREDE             |
-| 7      | PAREDE_PISC        |
-| 8      | PAREDE_RES         |
-| 9      | CONTENCAO          |
-| 10     | VIGA               |
-| 11     | LAJE_MACICA        |
-| 12     | LAJE_ALIG          |
-| 13     | RAMPA              |
-| 14     | BANDA              |
-| 15     | CAPITEL            |
-| 16     | MURETE             |
-| 17     | ESCADA             |
-| 18     | MASSAME            |
-| 19     | MACIÇO             |
-| 20     | OUTRO              |
-| 21     | OUTRO              |
-| 99     | OUTRO              |
-
-Cap 7 regra especial: `7.X.11` agrega lajes+bandas+capitéis.
-`7.X.12`, `7.X.14`, `7.X.15` → sempre 0 (filtrados nos índices).
+| sufixo | elemento_tipo |
+|--------|---------------|
+| 1 | FUNDACAO |
+| 2 | LAJE_FUNDO |
+| 3 | VIGA_FUND |
+| 4 | PILAR |
+| 5 | NUCLEO |
+| 6 | PAREDE |
+| 7 | PAREDE_PISC |
+| 8 | PAREDE_RES |
+| 9 | CONTENCAO |
+| 10 | VIGA |
+| 11 | LAJE_MACICA |
+| 12 | LAJE_ALIG |
+| 13 | RAMPA |
+| 14 | BANDA |
+| 15 | CAPITEL |
+| 16 | MURETE |
+| 17 | ESCADA |
+| 18 | MASSAME |
+| 19 | MACIÇO |
+| 20 | OUTRO |
+| 21 | OUTRO |
+| 99 | OUTRO |
 
 ---
 
 ## LÓGICA CRÍTICA JSJ
 
-### Parser (parser_excel.py)
-- Header na linha 14 do sheet `02.MQT`
-- Classificação por número de segmentos do código:
-  - 1 segmento → CAP (nivel=1), sem quantidades
-  - 2 segmentos → SUBCAP (nivel=2), com ou sem quantidades
+### Parser (`parser_excel.py`)
+- Sheet: `02.MQT` · Header: linha 14 · Dados: linha 15+
+- Classificação por segmentos do código (col 3):
+  - 1 segmento → CAP (nivel=1)
+  - 2 segmentos → SUBCAP (nivel=2) — com ou sem quantidades
   - 3 segmentos → ARTIGO (nivel=3)
   - 4+ segmentos → ARTIGO nivel4 (is_nivel4=True)
-- Linha com cod=None e desc → SPEC, juntar ao artigo anterior em `especificacao`
-- `elemento_sufixo` = sempre o 3º segmento (chave de mapeamento)
-- Zonas detectadas por pares QUANT.+PARCIAL na linha 14 (nunca ler labels do Excel)
+- Linha cod=None + desc → SPEC → guardar em `especificacao` do artigo anterior
+- `elemento_sufixo` = sempre 3º segmento (chave de mapeamento)
+- Zonas: pares QUANT.+PARCIAL consecutivos na linha 14 (nunca ler labels do Excel)
+- `quant_total` = coluna QUANT. TOTAL ou soma das zonas
 
-### Índices (indices.py)
-- A/V Lajes+Bandas+Capitéis calculado em conjunto:
-  `kg(7.X.11) ÷ m³(LAJE_MACICA + BANDA + CAPITEL)`
-- Artigos `7.X.{12,14,15}` ignorados (sempre 0)
-- C/Area só calculado se `area_construcao` disponível no snapshot
+### Mapper (`mapper_artigos.py`)
+- Lookup: `(capitulo, sufixo)` → `elemento_tipo`
+- CAPS_COM_MAPEAMENTO = `{'5', '6', '7'}`
+- nivel < 3 ou elemento_sufixo None → `elemento_tipo = None`
+- Sufixo desconhecido em caps 5/6/7 → `OUTRO`
+- Outros capítulos → `None` (nunca OUTRO)
 
-### Ingestão (ingest_mqt.py)
-- Deduplicação: se (project_id, fase, emissao) existe → apagar e re-criar
-- zona_labels herdado de `projects.zona_config`
-- Validação cruzada num_zonas: warning se divergir (não bloqueia)
+### Ingestão (`ingest_mqt.py`)
+- Deduplicação: se (project_id, fase, emissao) existe → apagar anterior e criar novo
+- `zona_labels` herdado de `projects.zona_config`
+- `ordem = idx` (posição no array) para preservar ordem do Excel
+- Validação cruzada `num_zonas`: warning se divergir (não bloqueia)
+
+### Índices (`validation/indices.py`)
+- A/V Lajes+Bandas+Capitéis: `kg(7.X.11) ÷ m³(LAJE_MACICA + BANDA + CAPITEL)`
+- Artigos `7.X.{12,14,15}` filtrados (sempre 0)
+- C/Area só calculado se `area_construcao` disponível
+- Resultado guardado em `mqt_indices` + retornado à app
+
+### Dashboard (`dashboard/app.py`)
+- `ELEMENTO_LABELS` dict no topo — reutilizado nas tabs Índices e Artigos
+- Tab Artigos: tabela HTML com estilos por nível, ORDER BY `ordem`
+- Tab Artigos: filtro capítulo ordenado numericamente
+- Tab Ingestão: campos emissão + área (4 colunas)
+- Tab Gestão: apagar snapshot → apaga mqt_indices + mqt_artigos + mqt_snapshot (por ordem)
 
 ---
 
@@ -329,7 +220,7 @@ Cap 7 regra especial: `7.X.11` agrega lajes+bandas+capitéis.
 
 ```
 mqt-system/
-├── config/settings.py
+├── config/settings.py              — SUPABASE_URL + SUPABASE_SERVICE_KEY
 ├── pipeline/
 │   ├── parser_excel.py
 │   ├── mapper_artigos.py
@@ -337,14 +228,31 @@ mqt-system/
 ├── validation/
 │   └── indices.py
 ├── database/
-│   ├── schema_mqt_d04.sql       ← base v1.0 (não alterar)
-│   └── schema_migrations.sql   ← ALTER TABLE fixes E/F/G/H
+│   ├── schema_mqt_d04.sql          — base v1.0 (não alterar)
+│   └── schema_migrations.sql      — ALTER TABLE fixes E/F/G/H
 ├── dashboard/
-│   └── app.py                   ← não renomear até branch/projetos-app
+│   └── app.py                      — não renomear até branch/projetos-app
 └── tests/
+    ├── test_connection.py
+    ├── test_parser.py
+    └── test_ingest.py
 ```
 
-**Streamlit:** `streamlit run dashboard/app.py`
-**Supabase key:** service_role — nunca expor ou commitar
-**Excel:** nunca commitar — está em .gitignore
-**venv:** já activo — nunca recriar
+**Target após branch/projetos-app:**
+```
+apps/
+├── main_app.py
+├── mqt_app.py      ← renomear de dashboard/app.py
+└── projetos_app.py ← novo
+```
+
+---
+
+## NOTAS OPERACIONAIS
+
+- **Supabase key:** service_role — nunca expor ou commitar
+- **Excel MQT:** nunca commitar — pasta `data/` no `.gitignore`
+- **venv:** já activo — nunca recriar
+- **Streamlit actual:** `streamlit run dashboard/app.py`
+- **Streamlit após branch 2:** `streamlit run apps/main_app.py`
+- **Projectos na DB:** amorim (ok), cuf (40 OUTRO — investigar próxima sessão)
