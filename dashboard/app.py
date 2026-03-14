@@ -109,9 +109,13 @@ def main():
             with c1:
                 label = st.text_input(f"Label zona {i+1}", value=d_label, key=f"zlabel_{i}")
             with c2:
-                tipo  = st.selectbox("Tipo", TIPOS_ZONA, index=TIPOS_ZONA.index(d_tipo), key=f"ztipo_{i}")
+                if int(num_zonas) == 1:
+                    tipo = 'Geral'
+                    st.text_input("Tipo", value='Geral', disabled=True, key=f"ztipo_{i}")
+                else:
+                    tipo = st.selectbox("Tipo", TIPOS_ZONA, index=TIPOS_ZONA.index(d_tipo), key=f"ztipo_{i}")
             with c3:
-                col   = st.text_input("Col Excel", value=d_col, key=f"zcol_{i}")
+                col = st.text_input("Quant", value=d_col, key=f"zcol_{i}")
             zona_config.append({'idx': i, 'col': col, 'label': label, 'tipo': tipo})
 
         if st.button("🚀 Processar MQT", type="primary"):
@@ -283,10 +287,21 @@ def main():
                 
                 selected_snapshot_art = st.selectbox("Snapshot", options=list(snapshot_options_art.keys()), key="art_snapshot")
                 snapshot_id_art = snapshot_options_art[selected_snapshot_art]
+
+                # Ler zona_config do snapshot para colunas dinâmicas
+                _snap_art = client.table('mqt_snapshots').select('zona_config').eq('id', snapshot_id_art).single().execute()
+                _zc_art = (_snap_art.data.get('zona_config') or []) if _snap_art.data else []
+                # Mapear zona idx → (label, col_field)
+                _COL_MAP = {'A': 'quant_a', 'B': 'quant_b', 'C': 'quant_c', 'D': 'quant_d'}
+                _IDX_MAP = {0: 'quant_a', 1: 'quant_b', 2: 'quant_c', 3: 'quant_d'}
+                _quant_cols = [
+                    (z['label'], _COL_MAP.get(z['col'].upper(), _IDX_MAP.get(z['idx'], 'quant_a')))
+                    for z in _zc_art
+                ] if _zc_art else [('Total', 'quant_total')]
                 
                 # Filtros
                 col1, col2 = st.columns(2)
-                
+
                 # Carregar artigos — incluir campo nivel
                 artigos_resp = client.table("mqt_artigos").select(
                     "artigo_cod, descricao, unidade, elemento_tipo, capitulo, nivel, quant_a, quant_b, quant_c, quant_total"
@@ -338,18 +353,21 @@ def main():
                             return "font-weight:bold;font-size:13px;"
                         return "font-size:12px;"
 
-                    html = """
+                    # Cabeçalhos dinâmicos de quantidades por zona
+                    _quant_headers = "".join(
+                        f"<th style='text-align:right'>{label}</th>"
+                        for label, _ in _quant_cols
+                    )
+                    html = f"""
 <style>
-.mqt-table{width:100%;border-collapse:collapse;font-family:sans-serif;}
-.mqt-table th{background:#444;color:#fff;padding:6px 8px;text-align:left;font-size:12px;}
-.mqt-table td{padding:4px 8px;border-bottom:1px solid #e0e0e0;vertical-align:top;}
-.mqt-table tr:hover td{background:#f0f4ff;}
+.mqt-table{{width:100%;border-collapse:collapse;font-family:sans-serif;}}
+.mqt-table th{{background:#444;color:#fff;padding:6px 8px;text-align:left;font-size:12px;}}
+.mqt-table td{{padding:4px 8px;border-bottom:1px solid #e0e0e0;vertical-align:top;}}
+.mqt-table tr:hover td{{background:#f0f4ff;}}
 </style>
 <table class='mqt-table'><thead><tr>
 <th>Código</th><th>Descrição</th><th>Un</th><th>Elemento</th>
-<th style='text-align:right'>Quant A</th>
-<th style='text-align:right'>Quant B</th>
-<th style='text-align:right'>Quant C</th>
+{_quant_headers}
 <th style='text-align:right'>Total</th>
 </tr></thead><tbody>"""
                     for _, row in df_filtered.iterrows():
@@ -357,15 +375,17 @@ def main():
                         style = _row_style(nivel)
                         elem_raw = row.get("elemento_tipo") or ""
                         elem_label = ELEMENTO_LABELS.get(elem_raw, elem_raw.replace("_", " ").title()) if elem_raw else ""
+                        quant_cells = "".join(
+                            f"<td style='{style};text-align:right'>{_fmt_num(row.get(cf))}</td>"
+                            for _, cf in _quant_cols
+                        )
                         html += (
                             f"<tr>"
                             f"<td style='{style}'>{row.get('artigo_cod','')}</td>"
                             f"<td style='{style}'>{row.get('descricao','') or ''}</td>"
                             f"<td style='{style}'>{row.get('unidade','') or ''}</td>"
                             f"<td style='{style}'>{elem_label}</td>"
-                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_a'))}</td>"
-                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_b'))}</td>"
-                            f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_c'))}</td>"
+                            f"{quant_cells}"
                             f"<td style='{style};text-align:right'>{_fmt_num(row.get('quant_total'))}</td>"
                             f"</tr>"
                         )

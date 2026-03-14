@@ -238,17 +238,17 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
 
     # 5. Calcular índices por zona
     COL_MAP = {'A': 'quant_a', 'B': 'quant_b', 'C': 'quant_c', 'D': 'quant_d'}
+    IDX_FALLBACK = {0: 'quant_a', 1: 'quant_b', 2: 'quant_c', 3: 'quant_d'}
 
     if zona_config:
         print(f"📊 A calcular índices para {len(zona_config)} zona(s)...")
-        # artigos completos (antes de filtrar aco zero) para zonas  
-        artigos_all = result_artigos = artigos  # artigos já filtrados
+        artigos_all = artigos  # artigos já filtrados
 
         for z in zona_config:
-            z_idx = z['idx']
+            z_idx = int(z['idx'])
             z_col = z.get('col', 'A')
             z_label = z.get('label', f'Zona {z_idx}')
-            col_field = COL_MAP.get(z_col, 'quant_a')
+            col_field = COL_MAP.get(z_col.upper(), IDX_FALLBACK.get(z_idx, 'quant_a'))
 
             print(f"  Zona {z_idx} ({z_label}) — col={z_col} → {col_field}")
 
