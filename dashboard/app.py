@@ -146,7 +146,7 @@ def main():
                         )
                         
                         # 3. Calcular índices
-                        indices = calcular_indices(snapshot_id, client, zona_config=zona_config)
+                        indices, indices_globais = calcular_indices(snapshot_id, client, zona_config=zona_config)
                         
                         # 4. Estatísticas
                         artigos_resp = client.table("mqt_artigos").select("elemento_tipo").eq("snapshot_id", snapshot_id).execute()
@@ -222,24 +222,67 @@ def main():
                 if not indices_resp.data:
                     st.warning("⚠️ Nenhum índice calculado para este snapshot.")
                 else:
-                    # Métrica de área por zona
-                    if vista != 'Global':
-                        area_zona = indices_resp.data[0].get('area_zona_m2')
-                        if area_zona:
-                            st.metric("Área da zona (cofragem laje)", f"{area_zona:,.1f} m²")
+                    # --- Métricas globais ---
+                    snap_meta = client.table('mqt_snapshots') \
+                        .select('area_construcao') \
+                        .eq('id', snapshot_id).single().execute()
+                    area_construcao = (snap_meta.data or {}).get('area_construcao')
 
-                    df = pd.DataFrame(indices_resp.data)
+                    # Área de cofragem de laje (do primeiro registo global com area_zona_m2)
+                    area_laje_row = client.table('mqt_indices') \
+                        .select('area_zona_m2') \
+                        .eq('snapshot_id', snapshot_id) \
+                        .is_('zona_idx', 'null') \
+                        .limit(1).execute()
+                    area_laje = (area_laje_row.data[0].get('area_zona_m2') if area_laje_row.data else None)
+
+                    if vista == 'Global':
+                        m1, m2, m3, m4, m5 = st.columns(5)
+                        m1.metric("Área cofragem laje", f"{area_laje:,.0f} m²" if area_laje else "—")
+                        total_aco = sum(r.get('aco_kg') or 0 for r in indices_resp.data)
+                        total_betao = sum(r.get('betao_m3') or 0 for r in indices_resp.data)
+                        total_cofr = sum(r.get('cofragem_m2') or 0 for r in indices_resp.data)
+                        ac_val = area_construcao or 0
+                        m2.metric("S/A — Aço/Área", f"{total_aco/ac_val:.1f} kg/m²" if ac_val else "—")
+                        m3.metric("V/A — Betão/Área", f"{total_betao/ac_val:.3f} m³/m²" if ac_val else "—")
+                        m4.metric("C/A — Cofr./Área", f"{total_cofr/ac_val:.3f} m²/m²" if ac_val else "—")
+                        m5.metric("Área construção", f"{ac_val:,.0f} m²" if ac_val else "—")
+                    else:
+                        # Vista por zona: mostrar apenas área de cofragem de laje da zona
+                        if area_zona := (indices_resp.data[0].get('area_zona_m2') if indices_resp.data else None):
+                            st.metric("Área cofragem laje (zona)", f"{area_zona:,.1f} m²")
+
+                    # Eliminar elementos sem quantidades na vista actual (betao=0, aco=0, cofragem=0)
+                    indices_data = [
+                        r for r in indices_resp.data
+                        if (r.get('betao_m3') or 0) + (r.get('aco_kg') or 0) + (r.get('cofragem_m2') or 0) > 0
+                    ]
+                    df = pd.DataFrame(indices_data)
                     
                     # Formatar colunas
                     df_display = df[[
-                        "elemento_tipo", "betao_m3", "aco_kg", "av",
-                        "cofragem_m2", "vc", "flag"
+                        "elemento_tipo", "betao_m3", "aco_kg", "cofragem_m2",
+                        "av", "vc", "ac", "flag"
                     ]].copy()
                     
                     df_display.columns = [
-                        "Elemento", "Betão m³", "Aço kg", "A/V kg/m³",
-                        "Cofragem m²", "V/C m³/m²", "Flag"
+                        "Elemento", "Betão m³", "Aço kg", "Cofragem m²",
+                        "A/V kg/m³", "V/C m³/m²", "A/C kg/m²", "Flag"
                     ]
+
+                    # Adicionar coluna Alvo A/V a partir de THRESHOLDS
+                    THRESHOLDS_ALVO = {
+                        'FUNDACAO': 120, 'MACIÇO': 120, 'LAJE_FUNDO': 150, 'VIGA_FUND': 150,
+                        'MASSAME': 125, 'CONTENCAO': 200, 'PILAR': 300, 'NUCLEO': 250,
+                        'PAREDE': 200, 'PAREDE_PISC': 200, 'PAREDE_RES': 200, 'MURETE': 0,
+                        'VIGA': 200, 'LAJE_MACICA': 130, 'LAJE_ALIG': 150, 'BANDA': 150,
+                        'CAPITEL': 150, 'RAMPA': 120, 'ESCADA': 120,
+                    }
+                    df_display.insert(
+                        df_display.columns.get_loc("A/V kg/m³") + 1,
+                        "Alvo A/V",
+                        df["elemento_tipo"].map(THRESHOLDS_ALVO)
+                    )
                     
                     # Formatar números
                     df_display["Betão m³"] = df_display["Betão m³"].fillna(0).round(2)
@@ -247,9 +290,20 @@ def main():
                     df_display["A/V kg/m³"] = df_display["A/V kg/m³"].fillna(0).round(1)
                     df_display["Cofragem m²"] = df_display["Cofragem m²"].fillna(0).round(2)
                     df_display["V/C m³/m²"] = df_display["V/C m³/m²"].fillna(0).round(3)
+                    df_display["A/C kg/m²"] = df_display["A/C kg/m²"].fillna(0).round(1)
+                    df_display["Alvo A/V"] = df_display["Alvo A/V"].fillna("—")
+
+                    # C/Area por elemento: cofragem do elemento / área de cofragem de laje da zona
+                    area_ref = df["area_zona_m2"].iloc[0] if "area_zona_m2" in df.columns and not df["area_zona_m2"].isna().all() else None
+                    if area_ref and area_ref > 0:
+                        df_display.insert(
+                            df_display.columns.get_loc("A/C kg/m²") + 1,
+                            "C/Area m²/m²",
+                            (df["cofragem_m2"] / area_ref).round(3)
+                        )
                     
                     # Emoji por flag
-                    flag_map = {"ok": "🟢", "alerta": "🟡", "erro": "🔴"}
+                    flag_map = {"ok": "🟢", "aviso": "🟡", "erro": "🔴", "sem_dados": "⚪"}
                     df_display["Flag"] = df_display["Flag"].map(lambda x: f"{flag_map.get(x, '⚪')} {x}")
 
                     # Nomes de elemento legíveis
@@ -257,7 +311,114 @@ def main():
                         lambda x: ELEMENTO_LABELS.get(x, x.replace("_", " ").title()) if x else x
                     )
 
+                    # Ordenar por ordem estrutural lógica
+                    ORDEM_ELEMENTOS = [
+                        "Fundações", "Laje de fundo", "Vigas de fundação", "Massame", "Maciços e plintos",
+                        "Paredes de contenção", "Pilares", "Núcleos", "Paredes", "Paredes de piscinas",
+                        "Paredes de reservatórios", "Muretes e platibandas", "Vigas",
+                        "Lajes maciças e dobras", "Lajes aligeiradas", "Bandas", "Capitéis",
+                        "Lajes de rampas", "Escadas betonadas in situ", "Outros",
+                    ]
+                    df_display["_ordem"] = df_display["Elemento"].map(
+                        {e: i for i, e in enumerate(ORDEM_ELEMENTOS)}
+                    ).fillna(99)
+                    df_display = df_display.sort_values("_ordem").drop(columns=["_ordem"])
+
                     st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+                    # ── Painel explicativo de índices ──────────────────────────────────────
+                    with st.expander("ℹ️ Guia de interpretação dos índices", expanded=False):
+                        st.markdown("""
+### A/V — Aço / Betão (kg/m³) · *Densidade de Armadura*
+
+**Calcula:** `Σ Aço (kg) ÷ Σ Betão (m³)` por elemento estrutural.
+
+**O que mede:** A quantidade de armadura por unidade de volume de betão.
+É o indicador estrutural e económico mais importante — revela se um elemento
+está sobredimensionado ou se há erros no modelo BIM
+(duplicação de armaduras em cruzamentos pilar-viga, omissão de estribos).
+
+**Como interpretar:**
+- Taxa geométrica de armadura 1% ≈ 78 kg/m³ · 2% ≈ 157 kg/m³
+- Valores baixos (< mín) → armadura em falta ou betão duplicado no modelo
+- Valores altos (> máx) → sobredimensionamento ou aço contado em duplicado
+- Sapatas são pouco armadas (< 150) · Pilares são densamente armados (> 220)
+
+**Critério de avaliação:**
+| Flag | Condição |
+|---|---|
+| 🟢 ok | Dentro de [A/V mín, A/V máx] do KB-05 |
+| 🟡 aviso | Fora de [mín, máx] mas dentro de [mín×0.7, máx×1.3] |
+| 🔴 erro | Fora da banda alargada |
+| ⚪ sem dados | Elemento sem threshold definido ou sem aço |
+
+---
+
+### V/C — Betão / Cofragem (m³/m²) · *Espessura Equivalente*
+
+**Calcula:** `Σ Betão (m³) ÷ Σ Cofragem (m²)` por elemento estrutural.
+
+**O que mede:** Literalmente a espessura média do elemento em metros.
+É o principal detector de erros de geometria e de regras de medição.
+
+**Como interpretar:**
+- Cofragem 1 face (ex: muro contra-terra): V/C = espessura real
+- Cofragem 2 faces (ex: pilar, viga): V/C = metade da espessura real
+- Ex: laje de 0.25m deve ter V/C ≈ 0.25 — se aparecer 1.50, a cofragem de fundo foi esquecida
+- Ex: muro de 0.25m com V/C = 0.25 e duas faces → confirmar se ambas as faces estão medidas
+
+**Valores de referência típicos:**
+Sapatas 0.80–1.20 · Pilares 0.10–0.25 · Lajes 0.20–0.35 · Bandas 0.30–0.45
+
+---
+
+### A/C — Aço / Cofragem (kg/m²) · *Densidade Superficial*
+
+**Calcula:** `Σ Aço (kg) ÷ Σ Cofragem (m²)` = A/V × V/C
+
+**O que mede:** Quanto aço existe por cada m² de painel de cofragem fechado.
+É um indicador derivado de validação cruzada — um erro agudo em A/C
+significa quase sempre que A/V ou V/C estão errados.
+
+**Relevância operacional:** Indica o rendimento esperado da subempreitada de
+armação. Valores muito acima do normal significam que o empreiteiro vai
+pedir trabalhos a mais por excesso de densidade de trabalho.
+
+**Exemplo:** Parede com V/C = 0.15 e A/V = 200 → A/C esperado ≈ 30 kg/m².
+Se apresentar 60 kg/m², há incoerência entre betão e aço que requer revisão.
+
+---
+
+### C/Area — Cofragem / Área de Construção (m²/m²) · *Intensidade de Forma*
+
+**Calcula:** `Σ Cofragem (m²) ÷ Área de construção (m²)`
+
+**O que mede:** A complexidade geométrica do edifício e a coerência de escala
+das quantidades extraídas face à dimensão real do projecto.
+
+**Referência obrigatória:** A laje principal deve ter C/Area ≈ 1.00
+(a sua área de cofragem deve cobrir a área do piso).
+
+**Como interpretar:**
+- C/Area (laje) muito < 1.00 → cofragem de laje provavelmente incompleta
+- C/Area (vigas) alto (> 0.50) → malha reticulada muito densa (alto custo de carpintaria)
+- C/Area (paredes) alto (> 0.40) → caves profundas ou grande contenção periférica
+- Área usada no denominador: derivada da cofragem de laje ingerida (proxy)
+
+---
+
+### Índices Globais de Projecto
+
+| Índice | Fórmula | Referência |
+|---|---|---|
+| **S/A** — Aço/Área | kg aço total ÷ m² área construção | ~40 kg/m² BA · ~52 kg/m² BA+PE |
+| **V/A** — Betão/Área | m³ betão total ÷ m² área construção | ~0.35–0.45 m³/m² |
+| **C/A** — Cofragem/Área | m² cofragem total ÷ m² área construção | depende da tipologia |
+
+Estes índices avaliam o projecto como um todo e permitem comparar
+entre fases (EP → PB → PEX) e entre projectos do histórico JSJ.
+Desvios significativos face à referência justificam revisão do MQT.
+                        """)
     
     # ============================================================
     # TAB 3 — ARTIGOS

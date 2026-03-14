@@ -13,6 +13,53 @@ ARTIGOS_ACO_ZERO = {'12', '14', '16'}  # elemento_sufixo a ignorar no cap 7
 # Elementos de laje para cálculo conjunto de A/V
 ELEMENTOS_LAJE_CONJUNTO = {'LAJE_MACICA', 'BANDA', 'CAPITEL'}
 
+# Thresholds KB-05 por elemento_tipo: av_min, av_alvo, av_max
+THRESHOLDS = {
+    'FUNDACAO':    {'av_min': 80,  'av_alvo': 120, 'av_max': 150},
+    'MACIÇO':      {'av_min': 90,  'av_alvo': 120, 'av_max': 160},
+    'LAJE_FUNDO':  {'av_min': 110, 'av_alvo': 150, 'av_max': 180},
+    'VIGA_FUND':   {'av_min': 120, 'av_alvo': 150, 'av_max': 180},
+    'MASSAME':     {'av_min': 80,  'av_alvo': 125, 'av_max': 150},
+    'CONTENCAO':   {'av_min': 120, 'av_alvo': 200, 'av_max': 250},
+    'PILAR':       {'av_min': 220, 'av_alvo': 300, 'av_max': 350},
+    'NUCLEO':      {'av_min': 150, 'av_alvo': 250, 'av_max': 300},
+    'PAREDE':      {'av_min': 120, 'av_alvo': 200, 'av_max': 250},
+    'PAREDE_PISC': {'av_min': 150, 'av_alvo': 200, 'av_max': 280},
+    'PAREDE_RES':  {'av_min': 150, 'av_alvo': 200, 'av_max': 280},
+    'MURETE':      {'av_min': 0,   'av_alvo': 0,   'av_max': 80},
+    'VIGA':        {'av_min': 160, 'av_alvo': 200, 'av_max': 280},
+    'LAJE_MACICA': {'av_min': 90,  'av_alvo': 130, 'av_max': 160},
+    'LAJE_ALIG':   {'av_min': 110, 'av_alvo': 150, 'av_max': 180},
+    'BANDA':       {'av_min': 120, 'av_alvo': 150, 'av_max': 200},
+    'CAPITEL':     {'av_min': 120, 'av_alvo': 150, 'av_max': 200},
+    'RAMPA':       {'av_min': 110, 'av_alvo': 120, 'av_max': 180},
+    'ESCADA':      {'av_min': 90,  'av_alvo': 120, 'av_max': 150},
+}
+
+
+def _calc_flag(elemento_tipo: str, av) -> str:
+    """
+    Calcula flag de validação com base nos thresholds KB-05.
+    Lógica:
+      - av is None ou elemento sem threshold → 'sem_dados'
+      - dentro de [av_min, av_max] → 'ok'
+      - fora de [av_min, av_max] mas dentro de [av_min*0.7, av_max*1.3] → 'aviso'
+      - fora da banda alargada → 'erro'
+    Excepção MURETE: aco=0 com av_max=80 → 'ok' se av==0
+    """
+    if av is None:
+        return 'sem_dados'
+    t = THRESHOLDS.get(elemento_tipo)
+    if t is None:
+        return 'sem_dados'
+    av_min = t['av_min']
+    av_max = t['av_max']
+    if av_min <= av <= av_max:
+        return 'ok'
+    if (av_min * 0.7) <= av <= (av_max * 1.3):
+        return 'aviso'
+    return 'erro'
+
 
 def _filtrar_artigos_aco(artigos):
     """
@@ -98,7 +145,7 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
     
     if not result.data:
         print("⚠️  Nenhum artigo encontrado para este snapshot")
-        return []
+        return [], {}
     
     artigos = result.data
     print(f"✅ {len(artigos)} artigos carregados\n")
@@ -160,8 +207,8 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
         ac = (aco / cofragem) if cofragem > 0 else None  # kg/m² (aço/cofragem)
         vc = (betao / cofragem) if cofragem > 0 else None  # m³/m² (volume/cofragem)
         
-        # Atribuir flag (por defeito 'ok' - flags manuais por agora)
-        flag = 'ok'
+        # Calcular flag com base nos thresholds KB-05
+        flag = _calc_flag(elemento_tipo, av)
         
         # Resultado para retorno
         resultado = {
@@ -172,7 +219,10 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
             'av': av,
             'ac': ac,
             'vc': vc,
-            'flag': flag
+            'flag': flag,
+            't_alvo': THRESHOLDS.get(elemento_tipo, {}).get('av_alvo'),
+            't_min':  THRESHOLDS.get(elemento_tipo, {}).get('av_min'),
+            't_max':  THRESHOLDS.get(elemento_tipo, {}).get('av_max'),
         }
         resultados.append(resultado)
         
@@ -226,7 +276,20 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
     else:
         c_area = None
         print(f"⚠️  C/Area não calculado (área de construção não disponível)\n")
-    
+
+    # Área total de cofragem de laje (global)
+    SUFIXOS_LAJE_COF = {'11', '12', '13', '14', '16'}
+    area_laje_global = sum(
+        float(a.get('quant_total') or 0)
+        for a in artigos
+        if a.get('capitulo') == '6'
+        and a.get('elemento_sufixo') in SUFIXOS_LAJE_COF
+    ) or None
+
+    # Adicionar area_zona_m2 global aos registos antes da inserção
+    for rec in indices_db:
+        rec['area_zona_m2'] = area_laje_global
+
     # 4. Inserir resultados em mqt_indices
     print(f"\n💾 A inserir {len(indices_db)} índices globais em mqt_indices...")
     
@@ -313,7 +376,7 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
                     'av': av,
                     'ac': ac,
                     'vc': vc,
-                    'flag': 'ok',
+                    'flag': _calc_flag(elemento_tipo, av),
                     'zona_idx': z_idx,
                     'area_zona_m2': area_zona_m2,
                     'calculado_em': datetime.utcnow().isoformat()
@@ -325,11 +388,23 @@ def calcular_indices(snapshot_id: str, supabase_client: Client,
 
         print()
 
+    total_aco = sum(qtys['aco_kg'] for qtys in agregados.values())
+    total_betao = sum(qtys['betao_m3'] for qtys in agregados.values())
+
+    indices_globais = {
+        'area_laje_global': area_laje_global,
+        'c_area': c_area,
+        's_a': round(total_aco / area_construcao, 2) if area_construcao and area_construcao > 0 else None,
+        'v_a': round(total_betao / area_construcao, 3) if area_construcao and area_construcao > 0 else None,
+        'c_a': round(total_cofragem / area_construcao, 3) if area_construcao and area_construcao > 0 else None,
+    }
+    print(f"📊 Índices globais: S/A={indices_globais['s_a']} kg/m² | V/A={indices_globais['v_a']} m³/m² | C/A={indices_globais['c_a']} m²/m²")
+
     print(f"{'='*70}")
     print(f"✅ CÁLCULO DE ÍNDICES COMPLETO")
     print(f"{'='*70}\n")
     
-    return resultados
+    return resultados, indices_globais
 
 
 def gerar_flags_validacao(indice_aco_betao: float, 
