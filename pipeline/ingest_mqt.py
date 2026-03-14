@@ -11,9 +11,10 @@ from pipeline.parser_excel import parse_mqt
 from pipeline.mapper_artigos import map_artigos
 
 
-def ingest_mqt(excel_path: str, project_id: str, 
+def ingest_mqt(excel_path: str, project_id: str,
                fase: str, supabase_client: Client,
-               emissao: str = 'E01', area_construcao: float = None) -> str:
+               emissao: str = 'E01', area_construcao: float = None,
+               zona_config: list = None) -> str:
     """
     Ingere um ficheiro Excel MQT para a base de dados Supabase
     
@@ -60,25 +61,6 @@ def ingest_mqt(excel_path: str, project_id: str,
     artigos_mapped = map_artigos(artigos, supabase_client)
     print(f"✅ {len(artigos_mapped)} artigos mapeados\n")
     
-    # 4. Buscar configuração do projeto (zona_config, num_zonas)
-    print("🔍 A buscar configuração do projeto...")
-    project = supabase_client.table('projects')\
-        .select('zona_config, num_zonas')\
-        .eq('id', project_id)\
-        .single()\
-        .execute()
-    
-    zona_config = project.data.get('zona_config') or []
-    zona_labels = {z['key']: z.get('label') or z.get('tipo') for z in zona_config}
-    project_num_zonas = project.data.get('num_zonas', 1)
-    print(f"✅ Projeto configurado com {project_num_zonas} zona(s)\n")
-    
-    # Validação cruzada num_zonas (warning, não erro)
-    if parser_num_zonas != project_num_zonas:
-        print(f"⚠️  ATENÇÃO: MQT tem {parser_num_zonas} zona(s) detectada(s) "
-              f"mas o projeto está configurado com {project_num_zonas}. "
-              f"Confirmar se o ficheiro está correto.\n")
-    
     # 5. Verificar snapshot duplicado por (project_id, fase, emissao)
     existing = supabase_client.table('mqt_snapshots')\
         .select('id')\
@@ -96,8 +78,9 @@ def ingest_mqt(excel_path: str, project_id: str,
         supabase_client.table('mqt_snapshots').delete().eq('id', old_snapshot_id).execute()
         print(f"✅ Snapshot anterior apagado — a criar novo...")
     
-    # 6. Criar snapshot
+    # 5. Criar snapshot
     print("💾 A criar snapshot em mqt_snapshots...")
+    zona_config = zona_config or []
     snapshot_data = {
         'project_id': project_id,
         'fase': fase,
@@ -105,8 +88,9 @@ def ingest_mqt(excel_path: str, project_id: str,
         'data_upload': date.today().isoformat(),
         'ficheiro_ref': ficheiro_ref,
         'area_construcao': area_construcao if area_construcao and area_construcao > 0 else None,
-        'num_zonas': parser_num_zonas,
-        'zona_labels': zona_labels,
+        'zona_config': zona_config if zona_config else None,
+        'zona_labels': [z['label'] for z in zona_config] if zona_config else [],
+        'num_zonas': len(zona_config) if zona_config else parser_num_zonas,
         'status': 'activo'
     }
     
@@ -145,7 +129,7 @@ def ingest_mqt(excel_path: str, project_id: str,
         }
         artigos_db.append(artigo_db)
     
-    # 8. Bulk insert em mqt_artigos
+    # 6. Bulk insert em mqt_artigos
     print(f"💾 A inserir {len(artigos_db)} artigos em mqt_artigos...")
     result = supabase_client.table('mqt_artigos').insert(artigos_db).execute()
     

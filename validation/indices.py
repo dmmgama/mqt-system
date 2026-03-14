@@ -56,7 +56,8 @@ def _calc_av_lajes_conjunto(artigos_betao, artigos_aco):
     return round(kg / m3, 1) if m3 > 0 else None
 
 
-def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
+def calcular_indices(snapshot_id: str, supabase_client: Client,
+                     zona_config: list = None) -> list[dict]:
     """
     Calcula índices estruturais por elemento_tipo para um snapshot MQT
     
@@ -73,10 +74,10 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     print(f"{'='*70}\n")
     print(f"📊 Snapshot ID: {snapshot_id}\n")
     
-    # 1. Ler snapshot para obter area_construcao
+    # 1. Ler snapshot para obter area_construcao e zona_config
     print("📖 A ler snapshot...")
     snapshot_result = supabase_client.table('mqt_snapshots') \
-        .select('area_construcao') \
+        .select('area_construcao, zona_config') \
         .eq('id', snapshot_id) \
         .single() \
         .execute()
@@ -84,6 +85,9 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
     snapshot = snapshot_result.data if snapshot_result.data else {}
     area_construcao = snapshot.get('area_construcao')
     print(f"✅ Área de construção: {area_construcao} m²" if area_construcao else "⚠️  Área não definida\n")
+
+    if zona_config is None:
+        zona_config = snapshot.get('zona_config') or []
     
     # 2. Ler todos os artigos do snapshot
     print("📖 A ler artigos do snapshot...")
@@ -183,6 +187,7 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
             'ac': ac,
             'vc': vc,
             'flag': flag,
+            'zona_idx': None,
             'calculado_em': datetime.utcnow().isoformat()
         }
         indices_db.append(indice_db)
@@ -223,15 +228,103 @@ def calcular_indices(snapshot_id: str, supabase_client: Client) -> list[dict]:
         print(f"⚠️  C/Area não calculado (área de construção não disponível)\n")
     
     # 4. Inserir resultados em mqt_indices
-    print(f"\n💾 A inserir {len(indices_db)} índices em mqt_indices...")
+    print(f"\n💾 A inserir {len(indices_db)} índices globais em mqt_indices...")
     
     try:
         result = supabase_client.table('mqt_indices').insert(indices_db).execute()
-        print(f"✅ {len(result.data)} índices inseridos\n")
+        print(f"✅ {len(result.data)} índices globais inseridos\n")
     except Exception as e:
         print(f"❌ Erro ao inserir índices: {e}\n")
-        # Não falhar - retornar resultados mesmo se inserção falhar
-    
+
+    # 5. Calcular índices por zona
+    COL_MAP = {'A': 'quant_a', 'B': 'quant_b', 'C': 'quant_c', 'D': 'quant_d'}
+
+    if zona_config:
+        print(f"📊 A calcular índices para {len(zona_config)} zona(s)...")
+        # artigos completos (antes de filtrar aco zero) para zonas  
+        artigos_all = result_artigos = artigos  # artigos já filtrados
+
+        for z in zona_config:
+            z_idx = z['idx']
+            z_col = z.get('col', 'A')
+            z_label = z.get('label', f'Zona {z_idx}')
+            col_field = COL_MAP.get(z_col, 'quant_a')
+
+            print(f"  Zona {z_idx} ({z_label}) — col={z_col} → {col_field}")
+
+            # Artigos com valor na coluna desta zona
+            artigos_zona = [a for a in artigos_all if a.get(col_field) is not None]
+
+            # Agregar por elemento_tipo usando a coluna da zona
+            agr_zona = defaultdict(lambda: {'betao_m3': 0.0, 'cofragem_m2': 0.0, 'aco_kg': 0.0})
+            for artigo in artigos_zona:
+                elemento_tipo = artigo.get('elemento_tipo')
+                capitulo = artigo.get('capitulo', '')
+                if not elemento_tipo:
+                    continue
+                qv = float(artigo.get(col_field) or 0)
+                if capitulo == '5':
+                    agr_zona[elemento_tipo]['betao_m3'] += qv
+                elif capitulo == '6':
+                    agr_zona[elemento_tipo]['cofragem_m2'] += qv
+                elif capitulo in ['7', '8']:
+                    agr_zona[elemento_tipo]['aco_kg'] += qv
+
+            # area_zona_m2: cofragem de laje (cap 6, sufixos 11/12/13/14/16)
+            SUFIXOS_LAJE_COF = {'11', '12', '13', '14', '16'}
+            area_zona_m2 = sum(
+                float(a.get(col_field) or 0)
+                for a in artigos_zona
+                if a.get('capitulo') == '6'
+                and a.get('elemento_sufixo') in SUFIXOS_LAJE_COF
+            ) or None
+
+            # A/V lajes conjunto para zona
+            kg_lajes_zona = sum(
+                float(a.get(col_field) or 0)
+                for a in artigos_zona
+                if a.get('capitulo') == '7' and a.get('elemento_sufixo') == '11'
+            )
+            m3_lajes_zona = sum(
+                float(a.get(col_field) or 0)
+                for a in artigos_zona
+                if a.get('capitulo') == '5'
+                and a.get('elemento_tipo') in ELEMENTOS_LAJE_CONJUNTO
+            )
+            av_lajes_zona = round(kg_lajes_zona / m3_lajes_zona, 1) if m3_lajes_zona > 0 else None
+
+            indices_zona = []
+            for elemento_tipo, qtys in sorted(agr_zona.items()):
+                betao = qtys['betao_m3']
+                cofragem = qtys['cofragem_m2']
+                aco = qtys['aco_kg']
+                av = (aco / betao) if betao > 0 else None
+                ac = (aco / cofragem) if cofragem > 0 else None
+                vc = (betao / cofragem) if cofragem > 0 else None
+                # A/V conjunto lajes
+                if elemento_tipo in ELEMENTOS_LAJE_CONJUNTO and av_lajes_zona is not None:
+                    av = av_lajes_zona
+                indices_zona.append({
+                    'snapshot_id': snapshot_id,
+                    'elemento_tipo': elemento_tipo,
+                    'betao_m3': betao,
+                    'aco_kg': aco,
+                    'cofragem_m2': cofragem,
+                    'av': av,
+                    'ac': ac,
+                    'vc': vc,
+                    'flag': 'ok',
+                    'zona_idx': z_idx,
+                    'area_zona_m2': area_zona_m2,
+                    'calculado_em': datetime.utcnow().isoformat()
+                })
+
+            if indices_zona:
+                supabase_client.table('mqt_indices').insert(indices_zona).execute()
+                print(f"    ✅ {len(indices_zona)} índices inseridos (zona {z_idx})")
+
+        print()
+
     print(f"{'='*70}")
     print(f"✅ CÁLCULO DE ÍNDICES COMPLETO")
     print(f"{'='*70}\n")

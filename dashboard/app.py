@@ -88,7 +88,32 @@ def main():
             )
             if area_construcao == 0:
                 st.caption("⚠️ Sem área — C/Area não calculado")
-        
+
+        # ——— Configurar Zonas ———
+        st.subheader("Zonas")
+        num_zonas = st.number_input("Nº de zonas", min_value=1, max_value=4, value=3, step=1)
+
+        TIPOS_ZONA = ['Fundacoes', 'Piso_Terreo', 'Pisos_Elevados', 'Cobertura', 'Outra']
+        COLS_EXCEL = ['A', 'B', 'C', 'D']
+        DEFAULTS = [
+            ('A - Fundações',      'Fundacoes',      'A'),
+            ('B - Piso Térreo',    'Piso_Terreo',    'B'),
+            ('C - Pisos Elevados', 'Pisos_Elevados', 'C'),
+            ('D - Cobertura',      'Cobertura',      'D'),
+        ]
+
+        zona_config = []
+        for i in range(int(num_zonas)):
+            d_label, d_tipo, d_col = DEFAULTS[i] if i < len(DEFAULTS) else (f'Zona {i+1}', 'Outra', COLS_EXCEL[i])
+            c1, c2, c3 = st.columns([3, 2, 1])
+            with c1:
+                label = st.text_input(f"Label zona {i+1}", value=d_label, key=f"zlabel_{i}")
+            with c2:
+                tipo  = st.selectbox("Tipo", TIPOS_ZONA, index=TIPOS_ZONA.index(d_tipo), key=f"ztipo_{i}")
+            with c3:
+                col   = st.selectbox("Col Excel", COLS_EXCEL, index=COLS_EXCEL.index(d_col), key=f"zcol_{i}")
+            zona_config.append({'idx': i, 'col': col, 'label': label, 'tipo': tipo})
+
         if st.button("🚀 Processar MQT", type="primary"):
             if ficheiro is None or not project_name:
                 st.error("❌ Seleccione um ficheiro Excel e indique o nome do projecto")
@@ -112,11 +137,12 @@ def main():
                         snapshot_id = ingest_mqt(
                             ficheiro, project_id, fase, client,
                             emissao=emissao,
-                            area_construcao=area_construcao if area_construcao > 0 else None
+                            area_construcao=area_construcao if area_construcao > 0 else None,
+                            zona_config=zona_config
                         )
                         
                         # 3. Calcular índices
-                        indices = calcular_indices(snapshot_id, client)
+                        indices = calcular_indices(snapshot_id, client, zona_config=zona_config)
                         
                         # 4. Estatísticas
                         artigos_resp = client.table("mqt_artigos").select("elemento_tipo").eq("snapshot_id", snapshot_id).execute()
@@ -170,13 +196,34 @@ def main():
                 
                 selected_snapshot = st.selectbox("Snapshot", options=list(snapshot_options.keys()))
                 snapshot_id = snapshot_options[selected_snapshot]
-                
-                # Carregar índices
-                indices_resp = client.table("mqt_indices").select("*").eq("snapshot_id", snapshot_id).execute()
+
+                # Ler zona_config do snapshot
+                snap_detail = client.table('mqt_snapshots') \
+                    .select('zona_config') \
+                    .eq('id', snapshot_id).single().execute()
+                zona_config_idx = (snap_detail.data.get('zona_config') or []) if snap_detail.data else []
+
+                # Seletor de vista
+                vista_opts = ['Global'] + [z['label'] for z in zona_config_idx]
+                vista = st.selectbox("Vista", vista_opts, key="vista_indices")
+
+                # Carregar índices filtrados por zona
+                q = client.table("mqt_indices").select("*").eq("snapshot_id", snapshot_id)
+                if vista == 'Global':
+                    indices_resp = q.is_("zona_idx", "null").execute()
+                else:
+                    z_idx = next(z['idx'] for z in zona_config_idx if z['label'] == vista)
+                    indices_resp = q.eq("zona_idx", z_idx).execute()
                 
                 if not indices_resp.data:
                     st.warning("⚠️ Nenhum índice calculado para este snapshot.")
                 else:
+                    # Métrica de área por zona
+                    if vista != 'Global':
+                        area_zona = indices_resp.data[0].get('area_zona_m2')
+                        if area_zona:
+                            st.metric("Área da zona (cofragem laje)", f"{area_zona:,.1f} m²")
+
                     df = pd.DataFrame(indices_resp.data)
                     
                     # Formatar colunas
